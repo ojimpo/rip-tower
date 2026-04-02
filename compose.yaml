@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3900:3900"
+    privileged: true
+    volumes:
+      - ./data:/app/data
+      - /mnt/media:/mnt/media
+      - /dev:/dev
+    environment:
+      - CONFIG_PATH=/app/data/config.yaml
+    restart: unless-stopped

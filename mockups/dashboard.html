@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Rip Tower</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#1a1a2e', card: '#16213e', hover: '#1f2f50' },
+            accent: { DEFAULT: '#e94560', soft: '#e9456022' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0f0f1a; }
+    * { -webkit-tap-highlight-color: transparent; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .pulse-spin { animation: pulse-spin 1.2s ease-in-out infinite; }
+    @keyframes pulse-spin { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body class="text-gray-100 min-h-screen">
+  <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto pb-20">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <div class="flex items-center justify-between px-4 py-3">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-purple-600 flex items-center justify-center text-sm font-bold">R</div>
+          <h1 class="text-lg font-bold tracking-tight">Rip Tower</h1>
+        </div>
+        <a href="settings.html" class="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition">
+          <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </a>
+      </div>
+    </header>
+
+    <!-- Notification Section -->
+    <section class="mx-3 mt-3">
+      <div class="rounded-xl overflow-hidden border border-amber-500/30 bg-amber-950/30">
+        <div class="px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
+          <span class="text-amber-400 text-sm font-semibold">要対応（2件）</span>
+        </div>
+        <a href="job-detail.html" class="flex items-start gap-3 px-3 py-2.5 hover:bg-white/5 transition border-b border-white/5">
+          <span class="text-lg mt-0.5">&#x23F8;&#xFE0F;</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-amber-200 truncate">不明なアーティスト / Track 1, Track 2...</p>
+            <p class="text-xs text-amber-400/70 mt-0.5">Review待ち &middot; 6時間経過</p>
+          </div>
+          <svg class="w-4 h-4 text-amber-500/50 mt-1.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#" class="flex items-start gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+          <span class="text-lg mt-0.5">&#x274C;</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-red-300 truncate">薄型: リッピング失敗</p>
+            <p class="text-xs text-red-400/70 mt-0.5">cd-paranoia timeout on track 5 &middot; 23分前</p>
+          </div>
+          <svg class="w-4 h-4 text-red-500/50 mt-1.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <!-- Active Jobs -->
+    <section class="mx-3 mt-4">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">Active Jobs</h2>
+
+      <!-- Job 1: Ripping -->
+      <a href="job-detail.html" class="block rounded-xl bg-surface-card border border-white/5 overflow-hidden hover:border-white/10 transition mb-3">
+        <div class="px-4 py-3 flex items-center gap-3 border-b border-white/5">
+          <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-600/40 to-emerald-900/40 flex items-center justify-center text-lg">&#x25B6;&#xFE0F;</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">Ripping</span>
+              <span class="text-xs text-gray-500">白ドライブ</span>
+            </div>
+            <p class="text-sm font-medium mt-0.5 truncate">BUMP OF CHICKEN / jupiter</p>
+          </div>
+        </div>
+        <!-- Track Progress -->
+        <div class="px-4 py-2.5 space-y-1">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-4 text-center">&#x2705;</span>
+            <span class="text-gray-400 w-4 text-right">1.</span>
+            <span class="text-gray-300">天体観測</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-4 text-center">&#x2705;</span>
+            <span class="text-gray-400 w-4 text-right">2.</span>
+            <span class="text-gray-300">Stage of the ground</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-4 text-center pulse-spin">&#x1F504;</span>
+            <span class="text-gray-400 w-4 text-right">3.</span>
+            <span class="text-white font-medium">beautiful glider</span>
+            <span class="ml-auto text-emerald-400 font-mono text-[11px]">42%</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-4 text-center text-gray-600">&#x25CB;</span>
+            <span class="text-gray-400 w-4 text-right">4.</span>
+            <span class="text-gray-500">Title of mine</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-4 text-center text-gray-600">&#x25CB;</span>
+            <span class="text-gray-400 w-4 text-right">5.</span>
+            <span class="text-gray-500">Diagnosis</span>
+          </div>
+          <button class="w-full text-center text-[11px] text-gray-500 hover:text-gray-400 pt-1 transition" onclick="event.preventDefault()">
+            + 残り6曲
+          </button>
+        </div>
+        <!-- Progress bar -->
+        <div class="h-0.5 bg-gray-800">
+          <div class="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all" style="width: 22%"></div>
+        </div>
+      </a>
+
+      <!-- Job 2: Encoding -->
+      <a href="job-detail.html" class="block rounded-xl bg-surface-card border border-white/5 overflow-hidden hover:border-white/10 transition mb-3">
+        <div class="px-4 py-3 flex items-center gap-3">
+          <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-600/40 to-blue-900/40 flex items-center justify-center text-lg">&#x1F3B5;</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-medium px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Encoding</span>
+              <span class="text-xs text-gray-500">黒ドライブ</span>
+            </div>
+            <p class="text-sm font-medium mt-0.5 truncate">Radiohead / OK Computer</p>
+          </div>
+          <span class="text-xs text-blue-400 font-mono">9/12</span>
+        </div>
+        <div class="h-0.5 bg-gray-800">
+          <div class="h-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all" style="width: 75%"></div>
+        </div>
+      </a>
+    </section>
+
+    <!-- Drives Section -->
+    <section class="mx-3 mt-4">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">Drives</h2>
+      <div class="rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5">
+
+        <!-- Drive 1: CD inserted, identified -->
+        <div class="px-4 py-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium">白ドライブ</span>
+                  <span class="text-lg" title="CD inserted">&#x1F4BF;</span>
+                </div>
+                <p class="text-xs text-gray-400 truncate mt-0.5">椎名林檎 / 無罪モラトリアム &middot; 12 tracks</p>
+              </div>
+            </div>
+            <button class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition text-lg" title="Eject">&#x23CF;</button>
+          </div>
+        </div>
+
+        <!-- Drive 2: Empty -->
+        <div class="px-4 py-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium">薄型</span>
+                  <span class="text-xs text-gray-600">空</span>
+                </div>
+                <p class="text-xs text-gray-500 mt-0.5">/dev/sr1</p>
+              </div>
+            </div>
+            <button class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition text-lg" title="Eject">&#x23CF;</button>
+          </div>
+        </div>
+
+        <!-- Drive 3: Disconnected -->
+        <div class="px-4 py-3 opacity-50">
+          <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full bg-gray-600 shrink-0"></div>
+            <div>
+              <span class="text-sm font-medium">黒ドライブ</span>
+              <p class="text-xs text-gray-500 mt-0.5">未接続</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recent Completions -->
+    <section class="mx-3 mt-4 mb-6">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">Recent</h2>
+      <div class="rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5">
+        <a href="job-detail.html" class="flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition">
+          <div class="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-2xl shrink-0">&#x1F3B6;</div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate">Radiohead / OK Computer</p>
+            <p class="text-xs text-gray-500 mt-0.5">12 tracks &middot; FLAC &middot; 3分前</p>
+          </div>
+          <span class="text-emerald-400 text-xs">&#x2713;</span>
+        </a>
+        <a href="job-detail.html" class="flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition">
+          <div class="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-2xl shrink-0">&#x1F3B6;</div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate">椎名林檎 / 無罪モラトリアム</p>
+            <p class="text-xs text-gray-500 mt-0.5">12 tracks &middot; FLAC &middot; 1時間前</p>
+          </div>
+          <span class="text-emerald-400 text-xs">&#x2713;</span>
+        </a>
+        <a href="job-detail.html" class="flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition">
+          <div class="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-2xl shrink-0">&#x1F3B6;</div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium truncate">Miles Davis / Kind of Blue</p>
+            <p class="text-xs text-gray-500 mt-0.5">5 tracks &middot; FLAC &middot; 昨日</p>
+          </div>
+          <span class="text-emerald-400 text-xs">&#x2713;</span>
+        </a>
+      </div>
+      <a href="history.html" class="block text-center text-xs text-gray-500 hover:text-gray-400 mt-2 py-1 transition">履歴をすべて表示 &rarr;</a>
+    </section>
+
+    <!-- Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 backdrop-blur-xl bg-[#0f0f1a]/90 border-t border-white/5 z-50">
+      <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto flex">
+        <a href="dashboard.html" class="flex-1 flex flex-col items-center py-2 text-accent">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+          <span class="text-[10px] mt-0.5 font-medium">Home</span>
+        </a>
+        <a href="history.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-[10px] mt-0.5">History</span>
+        </a>
+        <a href="settings.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          <span class="text-[10px] mt-0.5">Settings</span>
+        </a>
+      </div>
+    </nav>
+  </div>
+</body>
+</html>

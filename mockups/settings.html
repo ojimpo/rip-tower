@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Settings - Rip Tower</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#1a1a2e', card: '#16213e', hover: '#1f2f50' },
+            accent: { DEFAULT: '#e94560', soft: '#e9456022' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0f0f1a; }
+    * { -webkit-tap-highlight-color: transparent; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    input[type="text"], input[type="number"], input[type="password"], input[type="url"], select {
+      background: #0f0f1a;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8125rem;
+      color: #e5e7eb;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus { border-color: #e94560; }
+    select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 0.75rem center; padding-right: 2rem; }
+    .toggle { width: 44px; height: 24px; border-radius: 12px; position: relative; cursor: pointer; transition: background 0.2s; }
+    .toggle::after { content: ''; width: 18px; height: 18px; border-radius: 50%; background: white; position: absolute; top: 3px; left: 3px; transition: transform 0.2s; }
+    .toggle.on { background: #e94560; }
+    .toggle.on::after { transform: translateX(20px); }
+    .toggle.off { background: #374151; }
+  </style>
+</head>
+<body class="text-gray-100 min-h-screen">
+  <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto pb-20">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <div class="flex items-center justify-between px-4 py-3">
+        <h1 class="text-lg font-bold tracking-tight">Settings</h1>
+        <span class="text-[10px] text-gray-600">v0.1.0</span>
+      </div>
+    </header>
+
+    <div class="px-4 pt-3 space-y-3">
+
+      <!-- ==================== General ==================== -->
+      <details open class="group">
+        <summary class="flex items-center justify-between py-2.5 px-3 rounded-xl bg-surface-card border border-white/5 cursor-pointer hover:border-white/10 transition list-none">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-blue-500/15 flex items-center justify-center">
+              <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </div>
+            <span class="text-sm font-semibold">一般</span>
+          </div>
+          <svg class="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="mt-2 rounded-xl bg-surface-card border border-white/5 p-4 space-y-4">
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Auto-approve threshold</label>
+            <div class="flex items-center gap-3">
+              <input type="range" min="0" max="100" value="85" class="flex-1 accent-[#e94560] h-1" oninput="this.nextElementSibling.textContent=this.value">
+              <span class="text-sm font-mono text-white w-8 text-right">85</span>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1">Confidence score above this value will auto-approve</p>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Review reminder interval</label>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">First reminder</label>
+                <div class="flex items-center gap-1">
+                  <input type="number" value="6" class="w-full" min="0">
+                  <span class="text-xs text-gray-500 shrink-0">hours</span>
+                </div>
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Repeat every</label>
+                <div class="flex items-center gap-1">
+                  <input type="number" value="24" class="w-full" min="0">
+                  <span class="text-xs text-gray-500 shrink-0">hours</span>
+                </div>
+              </div>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1">Set to 0 to disable reminders</p>
+          </div>
+        </div>
+      </details>
+
+      <!-- ==================== Output ==================== -->
+      <details open class="group">
+        <summary class="flex items-center justify-between py-2.5 px-3 rounded-xl bg-surface-card border border-white/5 cursor-pointer hover:border-white/10 transition list-none">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-emerald-500/15 flex items-center justify-center">
+              <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+            </div>
+            <span class="text-sm font-semibold">出力</span>
+          </div>
+          <svg class="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="mt-2 rounded-xl bg-surface-card border border-white/5 p-4 space-y-4">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 mb-1.5 block">Encoding format</label>
+              <select>
+                <option selected>FLAC</option>
+                <option>ALAC</option>
+                <option>Opus</option>
+                <option>MP3</option>
+                <option>WAV</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 mb-1.5 block">Quality</label>
+              <select>
+                <option>Level 5</option>
+                <option>Level 6</option>
+                <option>Level 7</option>
+                <option selected>Level 8 (max)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Output directory</label>
+            <input type="text" value="/mnt/media/music">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Folder template</label>
+            <input type="text" value="{artist}/{album}/" id="folder-tpl" oninput="updatePreview()">
+            <div class="mt-1.5 px-2.5 py-1.5 rounded bg-black/30 border border-white/5">
+              <p class="text-[10px] text-gray-500">Preview:</p>
+              <p class="text-[11px] text-gray-300 font-mono" id="folder-preview">椎名林檎/無罪モラトリアム/</p>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">File name template</label>
+            <input type="text" value="{track_num} {title}.{ext}" id="file-tpl" oninput="updatePreview()">
+            <div class="mt-1.5 px-2.5 py-1.5 rounded bg-black/30 border border-white/5">
+              <p class="text-[10px] text-gray-500">Preview:</p>
+              <p class="text-[11px] text-gray-300 font-mono" id="file-preview">01 正しい街.flac</p>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- ==================== Integrations ==================== -->
+      <details class="group">
+        <summary class="flex items-center justify-between py-2.5 px-3 rounded-xl bg-surface-card border border-white/5 cursor-pointer hover:border-white/10 transition list-none">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-purple-500/15 flex items-center justify-center">
+              <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            </div>
+            <span class="text-sm font-semibold">連携</span>
+          </div>
+          <svg class="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="mt-2 rounded-xl bg-surface-card border border-white/5 p-4 space-y-4">
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Discord Webhook URL</label>
+            <input type="url" value="https://discord.com/api/webhooks/123456/abcdef..." placeholder="https://discord.com/api/webhooks/...">
+            <div class="flex items-center gap-1.5 mt-1">
+              <div class="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+              <span class="text-[10px] text-emerald-400">Connected</span>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Discogs Token</label>
+            <input type="password" value="xxxxxxxxxxxxxxxxxx" placeholder="Personal access token">
+          </div>
+          <div>
+            <label class="text-xs text-gray-400 mb-1.5 block">Plex</label>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Server URL</label>
+                <input type="url" value="http://localhost:32400" placeholder="http://...">
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500 block mb-1">Section ID</label>
+                <input type="number" value="2">
+              </div>
+            </div>
+          </div>
+          <div class="pt-2 border-t border-white/5">
+            <label class="text-xs text-gray-400 mb-1.5 block">LLM (Metadata assist)</label>
+            <div class="space-y-2">
+              <input type="password" value="sk-ant-xxxxxxxx" placeholder="API Key">
+              <select>
+                <option selected>Claude Haiku (fast, cheap)</option>
+                <option>Claude Sonnet (better quality)</option>
+              </select>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-1">Used only when rule-based processing cannot resolve metadata issues</p>
+          </div>
+          <div class="pt-2 border-t border-white/5">
+            <label class="text-xs text-gray-400 mb-1.5 block">&#x1F4DA; kashidashi (図書館CD管理)</label>
+            <div>
+              <label class="text-[10px] text-gray-500 block mb-1">API URL</label>
+              <input type="url" value="http://100.85.219.71:3800" placeholder="http://...">
+            </div>
+            <div class="flex items-center gap-1.5 mt-1">
+              <div class="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
+              <span class="text-[10px] text-emerald-400">Connected</span>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- ==================== Drives ==================== -->
+      <details class="group">
+        <summary class="flex items-center justify-between py-2.5 px-3 rounded-xl bg-surface-card border border-white/5 cursor-pointer hover:border-white/10 transition list-none">
+          <div class="flex items-center gap-2.5">
+            <div class="w-7 h-7 rounded-lg bg-cyan-500/15 flex items-center justify-center">
+              <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+            </div>
+            <span class="text-sm font-semibold">ドライブ</span>
+          </div>
+          <svg class="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="mt-2 rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5 overflow-hidden">
+          <!-- Drive 1 -->
+          <div class="px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium">白ドライブ</span>
+                  <button class="text-[10px] text-accent hover:underline">rename</button>
+                </div>
+                <p class="text-[10px] text-gray-500 mt-0.5">/dev/sr0 &middot; ASUS BW-16D1X-U</p>
+              </div>
+            </div>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Online</span>
+          </div>
+          <!-- Drive 2 -->
+          <div class="px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium">薄型</span>
+                  <button class="text-[10px] text-accent hover:underline">rename</button>
+                </div>
+                <p class="text-[10px] text-gray-500 mt-0.5">/dev/sr1 &middot; LG GP65NB60</p>
+              </div>
+            </div>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Online</span>
+          </div>
+          <!-- Drive 3: Offline -->
+          <div class="px-4 py-3 flex items-center justify-between opacity-50">
+            <div class="flex items-center gap-3">
+              <div class="w-2 h-2 rounded-full bg-gray-600"></div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium">黒ドライブ</span>
+                  <button class="text-[10px] text-accent hover:underline">rename</button>
+                </div>
+                <p class="text-[10px] text-gray-500 mt-0.5">Last seen: 2026-03-28</p>
+              </div>
+            </div>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-500">Offline</span>
+          </div>
+        </div>
+      </details>
+
+      <!-- Save button -->
+      <div class="pt-2 pb-4">
+        <button class="w-full py-3 rounded-xl bg-gradient-to-r from-accent to-pink-600 text-sm font-bold text-white shadow-lg shadow-accent/20 hover:shadow-accent/40 active:scale-[0.98] transition-all">
+          Save Changes
+        </button>
+      </div>
+    </div>
+
+    <!-- Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 backdrop-blur-xl bg-[#0f0f1a]/90 border-t border-white/5 z-50">
+      <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto flex">
+        <a href="dashboard.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+          <span class="text-[10px] mt-0.5">Home</span>
+        </a>
+        <a href="history.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-[10px] mt-0.5">History</span>
+        </a>
+        <a href="settings.html" class="flex-1 flex flex-col items-center py-2 text-accent">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          <span class="text-[10px] mt-0.5 font-medium">Settings</span>
+        </a>
+      </div>
+    </nav>
+  </div>
+
+  <script>
+    function updatePreview() {
+      const sampleData = { artist: '椎名林檎', album: '無罪モラトリアム', year: '1999', genre: 'J-Pop', track_num: '01', title: '正しい街', disc_num: '1', ext: 'flac' };
+      const folderTpl = document.getElementById('folder-tpl').value;
+      const fileTpl = document.getElementById('file-tpl').value;
+      let folderPreview = folderTpl;
+      let filePreview = fileTpl;
+      for (const [key, val] of Object.entries(sampleData)) {
+        folderPreview = folderPreview.replace(new RegExp('\\{' + key + '\\}', 'g'), val);
+        filePreview = filePreview.replace(new RegExp('\\{' + key + '\\}', 'g'), val);
+      }
+      document.getElementById('folder-preview').textContent = folderPreview;
+      document.getElementById('file-preview').textContent = filePreview;
+    }
+  </script>
+</body>
+</html>

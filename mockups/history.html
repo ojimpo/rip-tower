@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>History - Rip Tower</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            surface: { DEFAULT: '#1a1a2e', card: '#16213e', hover: '#1f2f50' },
+            accent: { DEFAULT: '#e94560', soft: '#e9456022' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0f0f1a; }
+    * { -webkit-tap-highlight-color: transparent; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .filter-active { background: rgba(233, 69, 96, 0.15); color: #e94560; border-color: rgba(233, 69, 96, 0.3); }
+    .filter-inactive { background: transparent; color: #6b7280; border-color: rgba(255,255,255,0.05); }
+  </style>
+</head>
+<body class="text-gray-100 min-h-screen">
+  <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto pb-20">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <div class="flex items-center justify-between px-4 py-3">
+        <h1 class="text-lg font-bold tracking-tight">History</h1>
+      </div>
+    </header>
+
+    <!-- Filter Tabs -->
+    <div class="px-4 pt-3 pb-2">
+      <div class="flex gap-2">
+        <button onclick="setFilter(this, 'all')" class="text-xs font-medium px-3 py-1.5 rounded-full border transition filter-active">全て</button>
+        <button onclick="setFilter(this, 'kashidashi')" class="text-xs font-medium px-3 py-1.5 rounded-full border transition filter-inactive">&#x1F4DA; 図書館</button>
+        <button onclick="setFilter(this, 'owned')" class="text-xs font-medium px-3 py-1.5 rounded-full border transition filter-inactive">&#x1F4BF; 手持ち</button>
+        <button onclick="setFilter(this, 'unknown')" class="text-xs font-medium px-3 py-1.5 rounded-full border transition filter-inactive">未分類</button>
+      </div>
+    </div>
+
+    <!-- Stats Summary -->
+    <div class="mx-4 mt-2 mb-4">
+      <div class="rounded-xl bg-surface-card border border-white/5 px-4 py-3">
+        <div class="grid grid-cols-4 gap-3 text-center">
+          <div>
+            <p class="text-2xl font-bold text-white">142</p>
+            <p class="text-[10px] text-gray-500 tracking-wider mt-0.5">全て</p>
+          </div>
+          <div>
+            <p class="text-2xl font-bold text-blue-400">98</p>
+            <p class="text-[10px] text-gray-500 tracking-wider mt-0.5">図書館</p>
+          </div>
+          <div>
+            <p class="text-2xl font-bold text-purple-400">41</p>
+            <p class="text-[10px] text-gray-500 tracking-wider mt-0.5">手持ち</p>
+          </div>
+          <div>
+            <p class="text-2xl font-bold text-gray-400">3</p>
+            <p class="text-[10px] text-gray-500 tracking-wider mt-0.5">未分類</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monthly Groups -->
+    <section class="mx-4">
+
+      <!-- 2026-04 -->
+      <div class="mb-5">
+        <div class="flex items-center gap-2 mb-2">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">2026-04</h3>
+          <span class="text-[10px] text-gray-600">5 albums</span>
+        </div>
+        <div class="rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5 overflow-hidden">
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-pink-900/50 to-purple-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">椎名林檎 / 無罪モラトリアム</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #1234</span>
+                <span class="text-[10px] text-gray-600">12 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">4/1</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-emerald-900/50 to-teal-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">Radiohead / OK Computer</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">&#x1F4BF; 手持ち</span>
+                <span class="text-[10px] text-gray-600">12 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">4/1</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-amber-900/50 to-yellow-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">BUMP OF CHICKEN / jupiter</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #5678</span>
+                <span class="text-[10px] text-gray-600">11 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">4/1</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-indigo-900/50 to-blue-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">Miles Davis / Kind of Blue</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">&#x1F4BF; 手持ち</span>
+                <span class="text-[10px] text-gray-600">5 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">4/1</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-red-900/50 to-orange-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">宇多田ヒカル / First Love</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #9012</span>
+                <span class="text-[10px] text-gray-600">11 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">4/1</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- 2026-03 -->
+      <div class="mb-5">
+        <div class="flex items-center gap-2 mb-2">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">2026-03</h3>
+          <span class="text-[10px] text-gray-600">8 albums</span>
+        </div>
+        <div class="rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5 overflow-hidden">
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-sky-900/50 to-cyan-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">くるり / TEAM ROCK</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #3456</span>
+                <span class="text-[10px] text-gray-600">13 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">3/28</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-lime-900/50 to-green-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">Nirvana / Nevermind</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">&#x1F4BF; 手持ち</span>
+                <span class="text-[10px] text-gray-600">12 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">3/25</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-violet-900/50 to-fuchsia-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">スピッツ / ハチミツ</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #7890</span>
+                <span class="text-[10px] text-gray-600">14 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">3/22</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-rose-900/50 to-red-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">Bjork / Homogenic</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">&#x1F4BF; 手持ち</span>
+                <span class="text-[10px] text-gray-600">10 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">3/18</span>
+          </a>
+        </div>
+        <button class="w-full text-center text-[11px] text-gray-500 hover:text-gray-400 mt-2 py-1 transition">+ 4 more albums</button>
+      </div>
+
+      <!-- 2026-02 -->
+      <div class="mb-5">
+        <div class="flex items-center gap-2 mb-2">
+          <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider">2026-02</h3>
+          <span class="text-[10px] text-gray-600">12 albums</span>
+        </div>
+        <div class="rounded-xl bg-surface-card border border-white/5 divide-y divide-white/5 overflow-hidden">
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-teal-900/50 to-emerald-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">サカナクション / DocumentaLy</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">&#x1F4DA; kashidashi #1122</span>
+                <span class="text-[10px] text-gray-600">13 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">2/28</span>
+          </a>
+          <a href="job-detail.html" class="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition">
+            <div class="w-11 h-11 rounded-lg bg-gradient-to-br from-orange-900/50 to-amber-900/50 flex items-center justify-center text-xl shrink-0">&#x1F3B6;</div>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium truncate">Aphex Twin / Selected Ambient Works 85-92</p>
+              <div class="flex items-center gap-1.5 mt-0.5">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">&#x1F4BF; 手持ち</span>
+                <span class="text-[10px] text-gray-600">13 tracks</span>
+              </div>
+            </div>
+            <span class="text-[10px] text-gray-600 shrink-0">2/20</span>
+          </a>
+        </div>
+        <button class="w-full text-center text-[11px] text-gray-500 hover:text-gray-400 mt-2 py-1 transition">+ 10 more albums</button>
+      </div>
+    </section>
+
+    <!-- Bottom Navigation -->
+    <nav class="fixed bottom-0 left-0 right-0 backdrop-blur-xl bg-[#0f0f1a]/90 border-t border-white/5 z-50">
+      <div class="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto flex">
+        <a href="dashboard.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+          <span class="text-[10px] mt-0.5">Home</span>
+        </a>
+        <a href="history.html" class="flex-1 flex flex-col items-center py-2 text-accent">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span class="text-[10px] mt-0.5 font-medium">History</span>
+        </a>
+        <a href="settings.html" class="flex-1 flex flex-col items-center py-2 text-gray-500 hover:text-gray-300 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          <span class="text-[10px] mt-0.5">Settings</span>
+        </a>
+      </div>
+    </nav>
+  </div>
+
+  <script>
+    function setFilter(btn, type) {
+      document.querySelectorAll('[onclick^="setFilter"]').forEach(b => {
+        b.className = b.className.replace('filter-active', 'filter-inactive');
+      });
+      btn.className = btn.className.replace('filter-inactive', 'filter-active');
+    }
+  </script>
+</body>
+</html>

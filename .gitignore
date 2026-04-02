@@ -1,0 +1,10 @@
+data/
+static/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+frontend/dist/
+.vite/
+*.egg-info/
+.env
