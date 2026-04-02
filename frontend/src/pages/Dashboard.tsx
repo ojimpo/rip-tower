@@ -1,9 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useWebSocket } from "../hooks/useWebSocket";
 import TrackProgress from "../components/TrackProgress";
 import type { Drive, JobSummary } from "../lib/types";
+
+const SOURCE_TYPES = [
+  { value: "library", label: "\u56F3\u66F8\u9928" },
+  { value: "owned", label: "\u624B\u6301\u3061" },
+  { value: "unknown", label: "\u672A\u5206\u985E" },
+] as const;
 
 function statusColor(status: string): { bg: string; text: string; gradient: string } {
   switch (status) {
@@ -40,6 +47,9 @@ function progressPercent(job: JobSummary): number {
 }
 
 export default function Dashboard() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+
   const { data: jobsData } = useQuery({
     queryKey: ["jobs"],
     queryFn: () => api.getJobs() as Promise<{ jobs: JobSummary[] }>,
@@ -53,6 +63,58 @@ export default function Dashboard() {
   });
 
   useWebSocket();
+
+  // Rip start dialog state
+  const [ripDialog, setRipDialog] = useState<{ driveId: string; driveName: string } | null>(null);
+  const [ripSourceType, setRipSourceType] = useState("unknown");
+  const [ripHintArtist, setRipHintArtist] = useState("");
+  const [ripHintAlbum, setRipHintAlbum] = useState("");
+  const [ripHintCatalog, setRipHintCatalog] = useState("");
+  const [ripError, setRipError] = useState<string | null>(null);
+
+  const ripMutation = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.startRip(body) as Promise<{ job_id: string }>,
+    onSuccess: (data) => {
+      setRipDialog(null);
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
+      navigate(`/job/${data.job_id}`);
+    },
+    onError: (err: Error) => {
+      setRipError(err.message);
+    },
+  });
+
+  const autoRipMutation = useMutation({
+    mutationFn: ({ driveId, body }: { driveId: string; body: Record<string, unknown> }) =>
+      api.updateDrive(driveId, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
+    },
+  });
+
+  const handleStartRip = () => {
+    if (!ripDialog) return;
+    setRipError(null);
+    const hints: Record<string, string> = {};
+    if (ripHintArtist) hints.artist = ripHintArtist;
+    if (ripHintAlbum) hints.album = ripHintAlbum;
+    if (ripHintCatalog) hints.catalog = ripHintCatalog;
+    ripMutation.mutate({
+      drive_id: ripDialog.driveId,
+      source_type: ripSourceType,
+      hints: Object.keys(hints).length > 0 ? hints : undefined,
+    });
+  };
+
+  const openRipDialog = (drive: Drive) => {
+    setRipDialog({ driveId: drive.drive_id, driveName: drive.name });
+    setRipSourceType("unknown");
+    setRipHintArtist("");
+    setRipHintAlbum("");
+    setRipHintCatalog("");
+    setRipError(null);
+  };
 
   const jobs = jobsData?.jobs ?? [];
   const activeJobs = jobs.filter((j) => !["complete", "error", "review"].includes(j.status));
@@ -224,6 +286,7 @@ export default function Dashboard() {
           <div className="rounded-xl bg-[#16213e] border border-white/5 divide-y divide-white/5">
             {drives.map((drive) => {
               const isOnline = !!drive.current_path;
+              const hasActiveJob = !!drive.active_job_id;
               return (
                 <div key={drive.drive_id} className={`px-4 py-3 ${!isOnline ? "opacity-50" : ""}`}>
                   <div className="flex items-center justify-between">
@@ -235,6 +298,11 @@ export default function Dashboard() {
                           {drive.has_disc && <span className="text-lg" title="CD inserted">{"\uD83D\uDCBF"}</span>}
                           {isOnline && !drive.has_disc && (
                             <span className="text-xs text-gray-600">{"\u7A7A"}</span>
+                          )}
+                          {drive.auto_rip && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e94560]/15 text-[#e94560] font-medium">
+                              Auto
+                            </span>
                           )}
                         </div>
                         {drive.disc_info && drive.disc_info.artist ? (
@@ -249,24 +317,145 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    {isOnline && (
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          api.ejectDrive(drive.drive_id);
-                        }}
-                        className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition text-lg"
-                        title="Eject"
-                      >
-                        {"\u23CF"}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Auto-rip toggle */}
+                      {isOnline && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (drive.auto_rip) {
+                              autoRipMutation.mutate({ driveId: drive.drive_id, body: { auto_rip: false } });
+                            } else {
+                              autoRipMutation.mutate({
+                                driveId: drive.drive_id,
+                                body: { auto_rip: true, auto_rip_source_type: "unknown" },
+                              });
+                            }
+                          }}
+                          className={`w-8 h-8 flex items-center justify-center rounded-lg transition text-sm ${
+                            drive.auto_rip
+                              ? "bg-[#e94560]/20 text-[#e94560] hover:bg-[#e94560]/30"
+                              : "hover:bg-white/10 text-gray-500 hover:text-gray-300"
+                          }`}
+                          title={drive.auto_rip ? "Auto-rip ON" : "Auto-rip OFF"}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      )}
+                      {/* Rip / Ripping button */}
+                      {isOnline && hasActiveJob ? (
+                        <Link
+                          to={`/job/${drive.active_job_id}`}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-medium hover:bg-emerald-500/25 transition"
+                        >
+                          Ripping...
+                        </Link>
+                      ) : isOnline && drive.has_disc ? (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            openRipDialog(drive);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-[#e94560]/15 text-[#e94560] text-xs font-semibold hover:bg-[#e94560]/25 transition"
+                        >
+                          Rip
+                        </button>
+                      ) : null}
+                      {/* Eject */}
+                      {isOnline && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            api.ejectDrive(drive.drive_id);
+                          }}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition text-lg"
+                          title="Eject"
+                        >
+                          {"\u23CF"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
             })}
           </div>
         </section>
+      )}
+
+      {/* Rip Start Dialog */}
+      {ripDialog && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setRipDialog(null)}>
+          <div
+            className="w-full max-w-md bg-[#16213e] rounded-t-2xl sm:rounded-2xl border border-white/10 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold">{ripDialog.driveName} - Rip</h3>
+              <button onClick={() => setRipDialog(null)} className="text-gray-500 hover:text-white transition text-lg">{"\u2715"}</button>
+            </div>
+
+            {/* Source Type */}
+            <div>
+              <label className="text-xs text-gray-400 mb-1.5 block">{"\u30BD\u30FC\u30B9\u7A2E\u5225"}</label>
+              <div className="flex gap-2">
+                {SOURCE_TYPES.map((st) => (
+                  <button
+                    key={st.value}
+                    onClick={() => setRipSourceType(st.value)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${
+                      ripSourceType === st.value
+                        ? "bg-[#e94560] text-white"
+                        : "bg-white/5 text-gray-400 hover:bg-white/10"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Hints */}
+            <div className="space-y-2">
+              <label className="text-xs text-gray-400 block">{"\u30D2\u30F3\u30C8"}({"\u4EFB\u610F"})</label>
+              <input
+                type="text"
+                value={ripHintArtist}
+                onChange={(e) => setRipHintArtist(e.target.value)}
+                placeholder="Artist"
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+              />
+              <input
+                type="text"
+                value={ripHintAlbum}
+                onChange={(e) => setRipHintAlbum(e.target.value)}
+                placeholder="Album"
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+              />
+              <input
+                type="text"
+                value={ripHintCatalog}
+                onChange={(e) => setRipHintCatalog(e.target.value)}
+                placeholder={"\u54C1\u756A (Catalog Number)"}
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+              />
+            </div>
+
+            {ripError && (
+              <p className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">{ripError}</p>
+            )}
+
+            <button
+              onClick={handleStartRip}
+              disabled={ripMutation.isPending}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              {ripMutation.isPending ? "Starting..." : "\u30EA\u30C3\u30D4\u30F3\u30B0\u958B\u59CB"}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Recent Completions */}

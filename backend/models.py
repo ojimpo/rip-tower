@@ -27,6 +27,8 @@ class Drive(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     current_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    auto_rip: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_rip_source_type: Mapped[str] = mapped_column(Text, default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 

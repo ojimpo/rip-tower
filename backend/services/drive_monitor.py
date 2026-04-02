@@ -80,10 +80,12 @@ def scan_drives() -> list[dict]:
 async def start_monitoring() -> None:
     """Register discovered drives in the database and start hotplug monitoring."""
     from backend.database import async_session
-    from backend.models import Drive
+    from backend.models import Drive, Job
     from backend.services.websocket import broadcast
 
     from sqlalchemy import select
+
+    auto_rip_candidates: list[tuple[str, str]] = []  # (drive_id, source_type)
 
     async with async_session() as session:
         # Mark all drives as disconnected first
@@ -116,10 +118,50 @@ async def start_monitoring() -> None:
                 "path": info["path"],
             })
 
+            # Check if auto_rip is enabled and no active job on this drive
+            if drive.auto_rip:
+                active_job = await session.execute(
+                    select(Job)
+                    .where(Job.drive_id == drive.drive_id)
+                    .where(Job.status.notin_(["complete", "error"]))
+                    .limit(1)
+                )
+                if not active_job.scalar_one_or_none():
+                    auto_rip_candidates.append((drive.drive_id, drive.auto_rip_source_type))
+
         await session.commit()
+
+    # Trigger auto-rip jobs outside the session
+    for drive_id, source_type in auto_rip_candidates:
+        logger.info("Auto-rip triggered for drive %s (source_type=%s)", drive_id, source_type)
+        await _trigger_auto_rip(drive_id, source_type)
 
     # Start background hotplug watcher
     asyncio.create_task(_watch_hotplug())
+
+
+async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
+    """Create and start a rip job for auto-rip."""
+    import uuid
+    from backend.database import async_session
+    from backend.models import Job
+    from backend.schemas import RipRequest
+    from backend.services.pipeline import run_pipeline
+
+    job_id = str(uuid.uuid4())
+    async with async_session() as session:
+        job = Job(
+            id=job_id,
+            drive_id=drive_id,
+            status="pending",
+            source_type=source_type,
+        )
+        session.add(job)
+        await session.commit()
+
+    request = RipRequest(drive_id=drive_id, source_type=source_type)
+    asyncio.create_task(run_pipeline(job_id, request))
+    logger.info("Auto-rip job %s created for drive %s", job_id, drive_id)
 
 
 async def _watch_hotplug() -> None:

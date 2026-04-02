@@ -20,12 +20,16 @@ class DriveResponse(BaseModel):
     name: str
     current_path: str | None
     last_seen_at: str | None
+    auto_rip: bool = False
+    auto_rip_source_type: str = "unknown"
 
     model_config = {"from_attributes": True}
 
 
 class DriveUpdateRequest(BaseModel):
-    name: str
+    name: str | None = None
+    auto_rip: bool | None = None
+    auto_rip_source_type: str | None = None
 
 
 @router.get("/drives")
@@ -66,6 +70,16 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                     "track_count": track_count,
                 }
 
+        # Check if there's an active (non-complete/error) job on this drive
+        active_job_result = await session.execute(
+            select(Job)
+            .where(Job.drive_id == drive.drive_id)
+            .where(Job.status.notin_(["complete", "error"]))
+            .order_by(Job.created_at.desc())
+            .limit(1)
+        )
+        active_job_for_drive = active_job_result.scalar_one_or_none()
+
         items.append({
             "drive_id": drive.drive_id,
             "name": drive.name,
@@ -73,6 +87,9 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
             "last_seen_at": drive.last_seen_at.isoformat() if drive.last_seen_at else None,
             "has_disc": has_disc,
             "disc_info": disc_info,
+            "auto_rip": drive.auto_rip,
+            "auto_rip_source_type": drive.auto_rip_source_type,
+            "active_job_id": active_job_for_drive.id if active_job_for_drive else None,
         })
 
     return items
@@ -84,12 +101,18 @@ async def update_drive(
     request: DriveUpdateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Rename a drive."""
+    """Update drive settings (name, auto_rip, etc.)."""
     drive = await session.get(Drive, drive_id)
     if not drive:
         raise HTTPException(status_code=404, detail="Drive not found")
 
-    drive.name = request.name
+    if request.name is not None:
+        drive.name = request.name
+    if request.auto_rip is not None:
+        drive.auto_rip = request.auto_rip
+    if request.auto_rip_source_type is not None:
+        drive.auto_rip_source_type = request.auto_rip_source_type
+
     await session.commit()
     return drive
 

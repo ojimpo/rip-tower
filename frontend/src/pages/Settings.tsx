@@ -9,6 +9,12 @@ interface AppConfig {
   integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string };
 }
 
+const SOURCE_TYPES = [
+  { value: "library", label: "\u56F3\u66F8\u9928" },
+  { value: "owned", label: "\u624B\u6301\u3061" },
+  { value: "unknown", label: "\u672A\u5206\u985E" },
+] as const;
+
 const SAMPLE_DATA: Record<string, string> = {
   artist: "\u690E\u540D\u6797\u6A4E",
   album: "\u7121\u7F6A\u30E2\u30E9\u30C8\u30EA\u30A2\u30E0",
@@ -382,61 +388,102 @@ export default function Settings() {
               const isRenaming = renamingDrive === drive.drive_id;
 
               return (
-                <div key={drive.drive_id} className={`px-4 py-3 flex items-center justify-between ${!isOnline ? "opacity-50" : ""}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-400" : "bg-gray-600"}`} />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        {isRenaming ? (
-                          <input
-                            type="text"
-                            value={driveNewName}
-                            onChange={(e) => setDriveNewName(e.target.value)}
-                            onBlur={() => {
-                              if (driveNewName && driveNewName !== drive.name) {
-                                renameMutation.mutate({ driveId: drive.drive_id, name: driveNewName });
-                              } else {
-                                setRenamingDrive(null);
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && driveNewName) {
-                                renameMutation.mutate({ driveId: drive.drive_id, name: driveNewName });
-                              }
-                              if (e.key === "Escape") setRenamingDrive(null);
-                            }}
-                            autoFocus
-                            className="text-sm font-medium bg-[#0f0f1a] border border-white/10 rounded px-2 py-0.5 outline-none focus:border-[#e94560] text-gray-200"
-                          />
-                        ) : (
-                          <>
-                            <span className="text-sm font-medium">{drive.name}</span>
-                            <button
-                              onClick={() => {
-                                setRenamingDrive(drive.drive_id);
-                                setDriveNewName(drive.name);
+                <div key={drive.drive_id} className={`px-4 py-3 ${!isOnline ? "opacity-50" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-emerald-400" : "bg-gray-600"}`} />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          {isRenaming ? (
+                            <input
+                              type="text"
+                              value={driveNewName}
+                              onChange={(e) => setDriveNewName(e.target.value)}
+                              onBlur={() => {
+                                if (driveNewName && driveNewName !== drive.name) {
+                                  renameMutation.mutate({ driveId: drive.drive_id, name: driveNewName });
+                                } else {
+                                  setRenamingDrive(null);
+                                }
                               }}
-                              className="text-[10px] text-[#e94560] hover:underline"
-                            >
-                              rename
-                            </button>
-                          </>
-                        )}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && driveNewName) {
+                                  renameMutation.mutate({ driveId: drive.drive_id, name: driveNewName });
+                                }
+                                if (e.key === "Escape") setRenamingDrive(null);
+                              }}
+                              autoFocus
+                              className="text-sm font-medium bg-[#0f0f1a] border border-white/10 rounded px-2 py-0.5 outline-none focus:border-[#e94560] text-gray-200"
+                            />
+                          ) : (
+                            <>
+                              <span className="text-sm font-medium">{drive.name}</span>
+                              <button
+                                onClick={() => {
+                                  setRenamingDrive(drive.drive_id);
+                                  setDriveNewName(drive.name);
+                                }}
+                                className="text-[10px] text-[#e94560] hover:underline"
+                              >
+                                rename
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-0.5">
+                          {isOnline
+                            ? `${drive.current_path}${drive.model ? ` · ${drive.model}` : ""}`
+                            : drive.last_seen_at
+                              ? `Last seen: ${new Date(drive.last_seen_at).toLocaleDateString("ja-JP")}`
+                              : "\u672A\u63A5\u7D9A"}
+                        </p>
                       </div>
-                      <p className="text-[10px] text-gray-500 mt-0.5">
-                        {isOnline
-                          ? `${drive.current_path}${drive.model ? ` · ${drive.model}` : ""}`
-                          : drive.last_seen_at
-                            ? `Last seen: ${new Date(drive.last_seen_at).toLocaleDateString("ja-JP")}`
-                            : "\u672A\u63A5\u7D9A"}
-                      </p>
                     </div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      isOnline ? "bg-emerald-500/15 text-emerald-400" : "bg-gray-700 text-gray-500"
+                    }`}>
+                      {isOnline ? "Online" : "Offline"}
+                    </span>
                   </div>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                    isOnline ? "bg-emerald-500/15 text-emerald-400" : "bg-gray-700 text-gray-500"
-                  }`}>
-                    {isOnline ? "Online" : "Offline"}
-                  </span>
+                  {/* Auto-rip settings */}
+                  <div className="mt-2.5 ml-5 flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        const newVal = !drive.auto_rip;
+                        renameMutation.mutate({
+                          driveId: drive.drive_id,
+                          name: drive.name,
+                        });
+                        api.updateDrive(drive.drive_id, {
+                          auto_rip: newVal,
+                          auto_rip_source_type: drive.auto_rip_source_type || "unknown",
+                        }).then(() => queryClient.invalidateQueries({ queryKey: ["drives"] }));
+                      }}
+                      className={`relative w-9 h-5 rounded-full transition-colors ${
+                        drive.auto_rip ? "bg-[#e94560]" : "bg-gray-700"
+                      }`}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                        drive.auto_rip ? "translate-x-4.5" : "translate-x-0.5"
+                      }`} />
+                    </button>
+                    <span className="text-xs text-gray-400">Auto-rip</span>
+                    {drive.auto_rip && (
+                      <select
+                        value={drive.auto_rip_source_type}
+                        onChange={(e) => {
+                          api.updateDrive(drive.drive_id, {
+                            auto_rip_source_type: e.target.value,
+                          }).then(() => queryClient.invalidateQueries({ queryKey: ["drives"] }));
+                        }}
+                        className="text-xs bg-[#0f0f1a] border border-white/8 rounded px-2 py-1 text-gray-200 outline-none focus:border-[#e94560] appearance-none"
+                      >
+                        {SOURCE_TYPES.map((st) => (
+                          <option key={st.value} value={st.value}>{st.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </div>
               );
             })}

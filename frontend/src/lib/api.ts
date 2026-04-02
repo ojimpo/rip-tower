@@ -90,6 +90,8 @@ export const api = {
   getDrives: () => request("/drives"),
   renameDrive: (driveId: string, name: string) =>
     request(`/drives/${driveId}`, { method: "PUT", body: JSON.stringify({ name }) }),
+  updateDrive: (driveId: string, body: Record<string, unknown>) =>
+    request(`/drives/${driveId}`, { method: "PUT", body: JSON.stringify(body) }),
   ejectDrive: (driveId: string) =>
     request(`/drives/${driveId}/eject`, { method: "POST" }),
 

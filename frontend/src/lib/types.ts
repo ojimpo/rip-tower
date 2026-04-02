@@ -11,6 +11,9 @@ export interface Drive {
     album: string | null;
     track_count: number | null;
   } | null;
+  auto_rip: boolean;
+  auto_rip_source_type: string;
+  active_job_id: string | null;
 }
 
 export interface Job {
