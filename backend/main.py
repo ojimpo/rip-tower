@@ -61,4 +61,32 @@ app.include_router(ws_router)
 
 # Serve frontend static files (production)
 if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+    from fastapi.responses import FileResponse
+
+    # Serve static assets (JS, CSS, icons, etc.)
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    app.mount("/icons", StaticFiles(directory=STATIC_DIR / "icons"), name="icons")
+
+    # Serve SW and manifest at root level
+    @app.get("/sw.js", include_in_schema=False)
+    @app.get("/workbox-{rest:path}", include_in_schema=False)
+    @app.get("/registerSW.js", include_in_schema=False)
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def static_file(rest: str = ""):
+        import os
+        filename = "workbox-" + rest if rest else ""
+        # Determine which file was requested from the path
+        from starlette.requests import Request
+        return FileResponse(STATIC_DIR / filename)
+
+    # SPA fallback — serve index.html for all non-API, non-asset routes
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # Don't intercept API or WS routes
+        if full_path.startswith("api/") or full_path.startswith("ws"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
+        file_path = STATIC_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(STATIC_DIR / "index.html")
