@@ -3,6 +3,14 @@ export interface Drive {
   name: string;
   current_path: string | null;
   last_seen_at: string | null;
+  model: string | null;
+  serial: string | null;
+  has_disc: boolean;
+  disc_info: {
+    artist: string | null;
+    album: string | null;
+    track_count: number | null;
+  } | null;
 }
 
 export interface Job {
@@ -43,6 +51,8 @@ export interface Track {
   encode_status: string;
   duration_ms: number | null;
   lyrics_source: string | null;
+  lyrics_content: string | null;
+  rip_progress: number | null;
 }
 
 export interface MetadataCandidate {
@@ -64,6 +74,7 @@ export interface Artwork {
   local_path: string | null;
   width: number | null;
   height: number | null;
+  file_size: number | null;
   selected: boolean;
 }
 
@@ -86,11 +97,41 @@ export interface JobDetail {
   kashidashi_candidates: KashidashiCandidate[];
 }
 
+export interface JobSummary {
+  job_id: string;
+  status: string;
+  artist: string | null;
+  album: string | null;
+  drive_name: string | null;
+  track_count: number | null;
+  current_track: number | null;
+  current_track_percent: number | null;
+  tracks_done: number | null;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
+  artwork_url: string | null;
+}
+
+export interface HistoryItem {
+  job_id: string;
+  artist: string | null;
+  album: string | null;
+  source_type: string;
+  completed_at: string | null;
+  track_count: number | null;
+  artwork_url: string | null;
+  kashidashi_id: string | null;
+}
+
 export type WsEvent =
   | { type: "job:status"; job_id: string; status: string }
   | { type: "job:progress"; job_id: string; track: number; total: number; percent: number }
+  | { type: "job:track_done"; job_id: string; track: number }
   | { type: "job:complete"; job_id: string }
   | { type: "job:error"; job_id: string; message: string }
   | { type: "job:review"; job_id: string; reason: string }
   | { type: "drive:connected"; drive_id: string; name: string; path: string }
-  | { type: "drive:disconnected"; drive_id: string; name: string };
+  | { type: "drive:disconnected"; drive_id: string; name: string }
+  | { type: "drive:disc_inserted"; drive_id: string }
+  | { type: "drive:disc_ejected"; drive_id: string };

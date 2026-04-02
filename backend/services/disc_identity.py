@@ -1,6 +1,16 @@
-"""Disc identification via cd-discid."""
+"""Disc identification via cd-discid.
+
+Ported from ~/dev/openclaw-cd-rip/scripts/disc_identity.py.
+
+cd-discid output format:
+    DISCID TRACK_COUNT OFFSET1 OFFSET2 ... OFFSETN LEADOUT_SECONDS
+
+Example:
+    a40b4d0c 12 150 18627 ... 281557 4003
+"""
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass
 
@@ -16,7 +26,9 @@ logger = logging.getLogger(__name__)
 class DiscIdentity:
     disc_id: str
     track_count: int
-    toc: list[int]
+    offsets: list[int]
+    leadout: int
+    toc_hash: str
     total_seconds: int
 
 
@@ -41,18 +53,31 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
     if proc.returncode != 0:
         raise RuntimeError(f"cd-discid failed: {stderr.decode().strip()}")
 
-    parts = stdout.decode().strip().split()
-    disc_id = parts[0]
+    raw = stdout.decode().strip()
+    if not raw:
+        raise RuntimeError(f"cd-discid returned empty output for {dev_path}")
+
+    parts = raw.split()
+    if len(parts) < 4:
+        raise RuntimeError(f"cd-discid output malformed: {raw}")
+
+    disc_id = parts[0].lower()
     track_count = int(parts[1])
-    toc = [int(x) for x in parts[2:]]
-    total_seconds = toc[-1] // 75 if toc else 0
+    offsets = [int(x) for x in parts[2:2 + track_count]]
+    leadout = int(parts[2 + track_count])
+
+    # SHA-256 hash of raw output for deduplication
+    toc_hash = hashlib.sha256(raw.encode()).hexdigest()
+
+    # leadout from cd-discid is already in seconds
+    total_seconds = leadout
 
     # Update job and create track records
     async with async_session() as session:
         job = await session.get(Job, job_id)
         if job:
             job.disc_id = disc_id
-            job.toc_hash = ":".join(str(x) for x in toc[:track_count])
+            job.toc_hash = toc_hash
 
         for i in range(1, track_count + 1):
             track = Track(
@@ -68,7 +93,9 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
     identity = DiscIdentity(
         disc_id=disc_id,
         track_count=track_count,
-        toc=toc,
+        offsets=offsets,
+        leadout=leadout,
+        toc_hash=toc_hash,
         total_seconds=total_seconds,
     )
     logger.info("Disc identified: %s (%d tracks)", disc_id, track_count)

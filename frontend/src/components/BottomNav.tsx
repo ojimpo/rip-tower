@@ -1,29 +1,44 @@
 import { Link, useLocation } from "react-router-dom";
 
-const navItems = [
-  { path: "/", label: "ホーム", icon: "🏠" },
-  { path: "/history", label: "履歴", icon: "📊" },
-  { path: "/settings", label: "設定", icon: "⚙️" },
-];
-
 export default function BottomNav() {
   const { pathname } = useLocation();
+  const isHome = pathname === "/";
+  const isHistory = pathname === "/history";
+  const isSettings = pathname === "/settings";
+  // Hide bottom nav on job detail pages
+  if (pathname.startsWith("/job/")) return null;
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-[#16213e] border-t border-gray-700">
-      <div className="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto flex justify-around">
-        {navItems.map((item) => (
-          <Link
-            key={item.path}
-            to={item.path}
-            className={`flex flex-col items-center py-2 px-4 text-xs ${
-              pathname === item.path ? "text-rose-400" : "text-gray-400"
-            }`}
-          >
-            <span className="text-lg">{item.icon}</span>
-            <span>{item.label}</span>
-          </Link>
-        ))}
+    <nav className="fixed bottom-0 left-0 right-0 backdrop-blur-xl bg-[#0f0f1a]/90 border-t border-white/5 z-50">
+      <div className="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto flex">
+        <Link
+          to="/"
+          className={`flex-1 flex flex-col items-center py-2 transition ${isHome ? "text-[#e94560]" : "text-gray-500 hover:text-gray-300"}`}
+        >
+          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" />
+          </svg>
+          <span className={`text-[10px] mt-0.5 ${isHome ? "font-medium" : ""}`}>Home</span>
+        </Link>
+        <Link
+          to="/history"
+          className={`flex-1 flex flex-col items-center py-2 transition ${isHistory ? "text-[#e94560]" : "text-gray-500 hover:text-gray-300"}`}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className={`text-[10px] mt-0.5 ${isHistory ? "font-medium" : ""}`}>History</span>
+        </Link>
+        <Link
+          to="/settings"
+          className={`flex-1 flex flex-col items-center py-2 transition ${isSettings ? "text-[#e94560]" : "text-gray-500 hover:text-gray-300"}`}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <span className={`text-[10px] mt-0.5 ${isSettings ? "font-medium" : ""}`}>Settings</span>
+        </Link>
       </div>
     </nav>
   );

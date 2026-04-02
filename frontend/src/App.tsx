@@ -8,7 +8,7 @@ import BottomNav from "./components/BottomNav";
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto min-h-screen pb-16">
+      <div className="max-w-md md:max-w-2xl lg:max-w-3xl mx-auto min-h-screen pb-20">
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/job/:id" element={<JobDetail />} />

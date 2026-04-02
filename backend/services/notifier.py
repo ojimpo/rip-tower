@@ -41,9 +41,22 @@ async def notify_start(job_id: str) -> None:
 
     artist = meta.artist if meta else "Unknown"
     album = meta.album if meta else "Unknown"
-    drive = job.drive_id or "import"
+    drive = job.drive_id or "import" if job else "unknown"
+    disc_id = (job.disc_id or "")[:8] if job else ""
+    track_count = job.track_count if job and hasattr(job, "track_count") else ""
 
-    await _send_discord(f"▶ リッピング開始：{artist} / {album}（{drive}）")
+    parts = [f"{artist} / {album}"]
+    detail_parts = []
+    if track_count:
+        detail_parts.append(f"{track_count}tracks")
+    if drive:
+        detail_parts.append(drive)
+    if disc_id:
+        detail_parts.append(disc_id)
+    if detail_parts:
+        parts.append(f"（{' / '.join(detail_parts)}）")
+
+    await _send_discord(f"▶ リッピング開始：{''.join(parts)}")
 
 
 async def notify_complete(job_id: str) -> None:

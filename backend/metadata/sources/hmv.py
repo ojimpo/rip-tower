@@ -89,7 +89,6 @@ class HmvSource(MetadataSource):
         for sku in skus[:2]:
             await asyncio.sleep(RATE_LIMIT)
             detail = await self._fetch_detail(
-                client=None,  # create new client per request
                 sku=sku,
                 hint_catalog=catalog,
                 hint_jan=jan,
@@ -104,7 +103,6 @@ class HmvSource(MetadataSource):
 
     async def _fetch_detail(
         self,
-        client: httpx.AsyncClient | None,
         sku: str,
         hint_catalog: str,
         hint_jan: str,
@@ -155,6 +153,12 @@ class HmvSource(MetadataSource):
             if m:
                 found_artist = m.group(1).strip()
 
+        # Parse label
+        found_label = ""
+        m = re.search(r"レーベル\s*[：:]\s*([^<\n]+)", body)
+        if m:
+            found_label = m.group(1).strip()
+
         # Parse track listing
         track_titles: list[str] = []
         for tm in re.finditer(r"(\d{1,2})\s*[·.．]\s*\[?([^\]\n<]{2,})\]?", body):
@@ -191,6 +195,9 @@ class HmvSource(MetadataSource):
             if track_count and len(track_titles) == track_count:
                 conf += 5
                 evidence["track_count_match"] = True
+
+        if found_label:
+            evidence["label"] = found_label
 
         return {
             "artist": found_artist,

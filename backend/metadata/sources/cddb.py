@@ -27,13 +27,13 @@ class CddbSource(MetadataSource):
         """Query CDDB via gnudb.org using disc ID and TOC."""
         if not identity or not identity.disc_id:
             return []
-        if not identity.toc or not identity.total_seconds:
+        if not identity.offsets or not identity.leadout:
             return []
 
         disc_id = identity.disc_id
         track_count = identity.track_count
-        offsets = identity.toc[:track_count]  # Track offsets only
-        duration_secs = identity.total_seconds
+        offsets = identity.offsets
+        duration_secs = identity.leadout
 
         # Step 1: CDDB query — find matching category/disc ID
         try:

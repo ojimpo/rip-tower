@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from backend.config import get_config
+from backend.metadata.normalize import similarity
 from backend.metadata.sources.base import MetadataSource
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,10 @@ class DiscogsSource(MetadataSource):
                 logger.exception("Discogs search failed")
                 return []
 
+        hint_catalog = (hints or {}).get("catalog", "")
+        hint_title = (hints or {}).get("title", "")
+        hint_artist = (hints or {}).get("artist", "")
+
         candidates = []
         for r in data.get("results", [])[:5]:
             # Discogs titles are "Artist - Album" format
@@ -71,12 +76,17 @@ class DiscogsSource(MetadataSource):
 
             conf = 35
             # Boost confidence for catalog number match
-            hint_catalog = (hints or {}).get("catalog", "")
             if hint_catalog:
                 for label_info in r.get("label", []):
                     if hint_catalog.upper() in label_info.get("catno", "").upper():
                         conf += 25
                         break
+            # Title similarity boost
+            if hint_title and similarity(hint_title, r_album) >= 0.8:
+                conf += 10
+            # Artist similarity boost
+            if hint_artist and similarity(hint_artist, r_artist) >= 0.6:
+                conf += 5
 
             candidates.append({
                 "artist": r_artist,

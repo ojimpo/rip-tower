@@ -30,7 +30,12 @@ FORMAT_EXT = {
 
 def safe_filename(name: str) -> str:
     """Sanitize a string for use as a filename."""
-    name = re.sub(r'[<>:"/\\|?*]', "_", name)
+    # Remove audio extensions from title (e.g., "Song.mp3" -> "Song")
+    name = re.sub(r"\.(m4a|mp3|wav|flac|aif|aiff)$", "", name, flags=re.IGNORECASE).strip()
+    # Replace path-unsafe characters
+    name = name.replace("/", "-").replace("\\", "-").replace(":", " -")
+    name = name.replace("?", "").replace("*", "")
+    name = re.sub(r'[<>"|]', "_", name)
     return name.strip(". ")
 
 
@@ -154,32 +159,56 @@ def _build_encode_cmd(
 
 
 async def _tag_flac(path: Path, track, meta) -> None:
-    """Apply metadata tags to a FLAC file using metaflac."""
-    tags = []
-    if meta:
-        if meta.artist:
-            tags.extend(["--set-tag", f"ARTIST={meta.artist}"])
-        if meta.album:
-            tags.extend(["--set-tag", f"ALBUM={meta.album}"])
-        if meta.year:
-            tags.extend(["--set-tag", f"DATE={meta.year}"])
-        if meta.genre:
-            tags.extend(["--set-tag", f"GENRE={meta.genre}"])
-        if meta.disc_number:
-            tags.extend(["--set-tag", f"DISCNUMBER={meta.disc_number}"])
-        if meta.total_discs:
-            tags.extend(["--set-tag", f"DISCTOTAL={meta.total_discs}"])
-    if track.title:
-        tags.extend(["--set-tag", f"TITLE={track.title}"])
-    if track.track_num:
-        tags.extend(["--set-tag", f"TRACKNUMBER={track.track_num}"])
-    if track.artist:
-        tags.extend(["--set-tag", f"ARTIST={track.artist}"])
+    """Apply metadata tags to a FLAC file using metaflac.
 
-    if tags:
-        proc = await asyncio.create_subprocess_exec(
-            "metaflac", *tags, str(path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+    Clears all existing tags first (matching original encoder.py behavior),
+    then sets all tags in a single metaflac call.
+    """
+    if not meta:
+        return
+
+    # Determine per-track artist vs album artist
+    track_artist = track.artist or meta.artist or ""
+    album_artist = meta.artist or ""
+
+    # Build tag arguments — clear first, then set all
+    tags = ["--remove-all-tags"]
+
+    if track_artist:
+        tags.append(f"--set-tag=ARTIST={track_artist}")
+    album_tag = (meta.album_base if hasattr(meta, "album_base") and meta.album_base else None) or meta.album
+    if album_tag:
+        tags.append(f"--set-tag=ALBUM={album_tag}")
+    if track.title:
+        tags.append(f"--set-tag=TITLE={track.title}")
+    if track.track_num:
+        tags.append(f"--set-tag=TRACKNUMBER={track.track_num}")
+
+    # ALBUMARTIST: use "Various Artists" for compilations, else album artist
+    if getattr(meta, "is_compilation", False):
+        tags.append("--set-tag=ALBUMARTIST=Various Artists")
+    elif album_artist:
+        tags.append(f"--set-tag=ALBUMARTIST={album_artist}")
+
+    if meta.year:
+        tags.append(f"--set-tag=DATE={meta.year}")
+    if meta.genre:
+        tags.append(f"--set-tag=GENRE={meta.genre}")
+    if meta.disc_number is not None:
+        tags.append(f"--set-tag=DISCNUMBER={meta.disc_number}")
+    if meta.total_discs is not None:
+        tags.append(f"--set-tag=TOTALDISCS={meta.total_discs}")
+
+    tags.append(str(path))
+
+    proc = await asyncio.create_subprocess_exec(
+        "metaflac", *tags,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "metaflac tagging failed for %s: %s",
+            path.name, stderr.decode("utf-8", "replace")[:200],
         )
-        await proc.communicate()

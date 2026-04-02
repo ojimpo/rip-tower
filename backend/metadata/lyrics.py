@@ -85,6 +85,44 @@ async def fetch_lyrics(job_id: str) -> None:
             )
 
 
+async def fetch_lyrics_for_track(job_id: str, track_num: int) -> None:
+    """Fetch lyrics for a single track."""
+    async with async_session() as session:
+        meta = await session.get(JobMetadata, job_id)
+        if not meta or not meta.artist:
+            return
+
+        track = await session.execute(
+            select(Track).where(Track.job_id == job_id, Track.track_num == track_num)
+        )
+        track = track.scalar_one_or_none()
+        if not track or not track.title:
+            return
+
+    artist = meta.artist or ""
+    album = meta.album or ""
+    title = track.title or ""
+    musixmatch_token = get_config().integrations.musixmatch_token
+
+    synced, plain = await _fetch_lrclib(artist, title, album, track.duration_ms)
+    source = "lrclib" if (synced or plain) else None
+
+    if not synced and not plain and musixmatch_token:
+        synced, plain = await _fetch_musixmatch(artist, title, album, musixmatch_token)
+        source = "musixmatch" if (synced or plain) else None
+
+    if synced or plain:
+        async with async_session() as session:
+            db_track = await session.execute(
+                select(Track).where(Track.job_id == job_id, Track.track_num == track_num)
+            )
+            db_track = db_track.scalar_one()
+            db_track.lyrics_synced = synced
+            db_track.lyrics_plain = plain
+            db_track.lyrics_source = source
+            await session.commit()
+
+
 async def _fetch_lrclib(
     artist: str, title: str, album: str, duration_ms: int | None
 ) -> tuple[str | None, str | None]:
