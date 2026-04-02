@@ -100,6 +100,35 @@ export const api = {
   },
   getStats: () => request("/history/stats"),
 
+  // WAV bulk import
+  importWavFiles: async (params: {
+    files: { file: File; trackNum: number }[];
+    artist?: string;
+    album?: string;
+    catalogNumber?: string;
+    sourceType: string;
+    discNumber: number;
+    totalDiscs: number;
+  }) => {
+    const form = new FormData();
+    for (const { file, trackNum } of params.files) {
+      form.append("files", file);
+      form.append("track_numbers", String(trackNum));
+    }
+    if (params.artist) form.append("artist", params.artist);
+    if (params.album) form.append("album", params.album);
+    if (params.catalogNumber) form.append("catalog_number", params.catalogNumber);
+    form.append("source_type", params.sourceType);
+    form.append("disc_number", String(params.discNumber));
+    form.append("total_discs", String(params.totalDiscs));
+    const res = await fetch(`${BASE}/import`, { method: "POST", body: form });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(error.detail || res.statusText);
+    }
+    return res.json();
+  },
+
   // Settings
   getSettings: () => request("/settings"),
   updateSettings: (body: Record<string, unknown>) =>

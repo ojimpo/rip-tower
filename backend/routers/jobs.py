@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session
-from backend.models import Job, JobMetadata, Track, MetadataCandidate, Artwork, KashidashiCandidate
+from backend.models import Drive, Job, JobMetadata, Track, MetadataCandidate, Artwork, KashidashiCandidate
 from backend.schemas import (
     JobResponse,
     JobDetailResponse,
@@ -124,14 +124,16 @@ async def import_wav(
     )
 
 
-@router.get("/jobs", response_model=JobListResponse)
+@router.get("/jobs")
 async def list_jobs(
     status: Optional[str] = None,
     source_type: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """List jobs with optional filters."""
-    query = select(Job).order_by(Job.created_at.desc())
+    """List jobs with summary info (metadata, track progress, drive name)."""
+    from sqlalchemy.orm import selectinload
+
+    query = select(Job).order_by(Job.created_at.desc()).limit(50)
     if status:
         query = query.where(Job.status == status)
     if source_type:
@@ -139,7 +141,55 @@ async def list_jobs(
 
     result = await session.execute(query)
     jobs = result.scalars().all()
-    return JobListResponse(jobs=[JobResponse.from_orm(j) for j in jobs])
+
+    summaries = []
+    for job in jobs:
+        # Get metadata
+        meta = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job.id)
+        )
+        meta = meta.scalar_one_or_none()
+
+        # Get track progress
+        tracks = await session.execute(
+            select(Track).where(Track.job_id == job.id).order_by(Track.track_num)
+        )
+        tracks = tracks.scalars().all()
+        track_count = len(tracks)
+        tracks_done = sum(1 for t in tracks if t.rip_status in ("ok", "ok_degraded"))
+
+        # Current ripping track
+        current_track = None
+        current_track_percent = None
+        for t in tracks:
+            if t.rip_status == "ripping":
+                current_track = t.track_num
+                break
+
+        # Drive name
+        drive_name = None
+        if job.drive_id:
+            drive = await session.get(Drive, job.drive_id)
+            if drive:
+                drive_name = drive.name
+
+        summaries.append({
+            "job_id": job.id,
+            "status": job.status,
+            "artist": meta.artist if meta else None,
+            "album": meta.album if meta else None,
+            "drive_name": drive_name,
+            "track_count": track_count or None,
+            "current_track": current_track,
+            "current_track_percent": current_track_percent,
+            "tracks_done": tracks_done,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "error_message": job.error_message,
+            "artwork_url": None,  # TODO: add artwork thumbnail
+        })
+
+    return {"jobs": summaries}
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)

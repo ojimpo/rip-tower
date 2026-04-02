@@ -28,11 +28,54 @@ class DriveUpdateRequest(BaseModel):
     name: str
 
 
-@router.get("/drives", response_model=list[DriveResponse])
+@router.get("/drives")
 async def list_drives(session: AsyncSession = Depends(get_session)):
-    """List all known drives with connection status."""
+    """List all known drives with connection status and disc info."""
+    from backend.models import Job, JobMetadata
+
     result = await session.execute(select(Drive).order_by(Drive.created_at))
-    return result.scalars().all()
+    drives = result.scalars().all()
+
+    items = []
+    for drive in drives:
+        # Check if there's an active job on this drive (disc info)
+        disc_info = None
+        has_disc = drive.current_path is not None
+        if drive.current_path:
+            active_job = await session.execute(
+                select(Job)
+                .where(Job.drive_id == drive.drive_id)
+                .where(Job.status.notin_(["complete", "error"]))
+                .order_by(Job.created_at.desc())
+                .limit(1)
+            )
+            active_job = active_job.scalar_one_or_none()
+            if active_job and active_job.disc_id:
+                meta = await session.execute(
+                    select(JobMetadata).where(JobMetadata.job_id == active_job.id)
+                )
+                meta = meta.scalar_one_or_none()
+                from backend.models import Track
+                from sqlalchemy import func as sa_func
+                track_count = (await session.execute(
+                    select(sa_func.count()).select_from(Track).where(Track.job_id == active_job.id)
+                )).scalar() or 0
+                disc_info = {
+                    "artist": meta.artist if meta else None,
+                    "album": meta.album if meta else None,
+                    "track_count": track_count,
+                }
+
+        items.append({
+            "drive_id": drive.drive_id,
+            "name": drive.name,
+            "current_path": drive.current_path,
+            "last_seen_at": drive.last_seen_at.isoformat() if drive.last_seen_at else None,
+            "has_disc": has_disc,
+            "disc_info": disc_info,
+        })
+
+    return items
 
 
 @router.put("/drives/{drive_id}", response_model=DriveResponse)

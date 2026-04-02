@@ -73,6 +73,16 @@ export default function Dashboard() {
             </div>
             <h1 className="text-lg font-bold tracking-tight">Rip Tower</h1>
           </div>
+          <div className="flex items-center gap-1">
+            <Link
+              to="/import"
+              className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition"
+              title="WAV Import"
+            >
+              <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+              </svg>
+            </Link>
           <Link
             to="/settings"
             className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition"
@@ -82,6 +92,7 @@ export default function Dashboard() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </Link>
+          </div>
         </div>
       </header>
 

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session
-from backend.models import Job, JobMetadata
+from backend.models import Job, JobMetadata, Track, KashidashiCandidate
 
 router = APIRouter(tags=["history"])
 
@@ -50,15 +50,43 @@ async def get_history(
 
     items = []
     for job, meta in result.all():
-        items.append(HistoryItem(
-            job_id=job.id,
-            artist=meta.artist if meta else None,
-            album=meta.album if meta else None,
-            source_type=job.source_type,
-            completed_at=job.completed_at.isoformat() if job.completed_at else None,
-        ))
+        # Track count
+        track_count_result = await session.execute(
+            select(func.count()).select_from(Track).where(Track.job_id == job.id)
+        )
+        track_count = track_count_result.scalar() or 0
 
-    return {"items": items, "offset": offset, "limit": limit}
+        # Kashidashi match
+        kashi = await session.execute(
+            select(KashidashiCandidate)
+            .where(KashidashiCandidate.job_id == job.id, KashidashiCandidate.matched == True)
+        )
+        kashi = kashi.scalar_one_or_none()
+
+        items.append({
+            "job_id": job.id,
+            "artist": meta.artist if meta else None,
+            "album": meta.album if meta else None,
+            "source_type": job.source_type,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "track_count": track_count or None,
+            "artwork_url": None,
+            "kashidashi_id": str(kashi.item_id) if kashi else None,
+        })
+
+    # Total count for pagination
+    total_query = select(func.count()).select_from(Job).where(Job.status == "complete")
+    if source_type:
+        total_query = total_query.where(Job.source_type == source_type)
+    total = (await session.execute(total_query)).scalar() or 0
+
+    return {
+        "items": items,
+        "total": total,
+        "has_more": offset + limit < total,
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 @router.get("/history/stats", response_model=HistoryStats)
