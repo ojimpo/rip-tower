@@ -13,8 +13,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _get_usb_serial(dev_path: str) -> str | None:
-    """Get USB serial number for a device via udevadm."""
+def _get_drive_info(dev_path: str) -> dict | None:
+    """Get drive serial and model via udevadm or /sys fallback."""
+    dev_name = Path(dev_path).name  # e.g. "sr0"
+
+    # Try udevadm first
+    serial = None
+    model = None
     try:
         result = subprocess.run(
             ["udevadm", "info", "--query=property", f"--name={dev_path}"],
@@ -22,14 +27,36 @@ def _get_usb_serial(dev_path: str) -> str | None:
             text=True,
             timeout=5,
         )
-        for line in result.stdout.splitlines():
-            if line.startswith("ID_SERIAL_SHORT="):
-                return line.split("=", 1)[1].strip()
-            if line.startswith("ID_SERIAL="):
-                return line.split("=", 1)[1].strip()
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if line.startswith("ID_SERIAL_SHORT="):
+                    serial = line.split("=", 1)[1].strip()
+                elif line.startswith("ID_SERIAL=") and not serial:
+                    serial = line.split("=", 1)[1].strip()
+                elif line.startswith("ID_MODEL="):
+                    model = line.split("=", 1)[1].strip().replace("_", " ")
     except Exception:
-        logger.warning("Failed to get serial for %s", dev_path)
-    return None
+        pass
+
+    # Fallback: read from /sys/block/
+    if not serial:
+        sys_path = Path(f"/sys/block/{dev_name}/device")
+        try:
+            vendor = (sys_path / "vendor").read_text().strip() if (sys_path / "vendor").exists() else ""
+            model_sys = (sys_path / "model").read_text().strip() if (sys_path / "model").exists() else ""
+            # Use vendor+model as a stable identifier
+            if vendor or model_sys:
+                serial = f"{vendor}_{model_sys}_{dev_name}".replace(" ", "_")
+                model = model or f"{vendor} {model_sys}".strip()
+        except Exception:
+            pass
+
+    if not serial:
+        # Last resort: use device name
+        serial = dev_name
+        model = dev_name
+
+    return {"serial": serial, "model": model or serial[:20]}
 
 
 def scan_drives() -> list[dict]:
@@ -40,28 +67,12 @@ def scan_drives() -> list[dict]:
     drives = []
     for dev in sorted(Path("/dev").glob("sr*")):
         dev_path = str(dev)
-        serial = _get_usb_serial(dev_path)
-        if serial:
-            # Try to get model name
-            model = None
-            try:
-                result = subprocess.run(
-                    ["udevadm", "info", "--query=property", f"--name={dev_path}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                for line in result.stdout.splitlines():
-                    if line.startswith("ID_MODEL="):
-                        model = line.split("=", 1)[1].strip().replace("_", " ")
-                        break
-            except Exception:
-                pass
-
+        info = _get_drive_info(dev_path)
+        if info:
             drives.append({
                 "path": dev_path,
-                "serial": serial,
-                "model": model or serial[:16],
+                "serial": info["serial"],
+                "model": info["model"],
             })
     return drives
 
