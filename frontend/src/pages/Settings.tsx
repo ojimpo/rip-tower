@@ -16,7 +16,7 @@ const SOURCE_TYPES = [
 ] as const;
 
 const SAMPLE_DATA: Record<string, string> = {
-  artist: "\u690E\u540D\u6797\u6A4E",
+  artist: "\u690E\u540D\u6797\u6A8E",
   album: "\u7121\u7F6A\u30E2\u30E9\u30C8\u30EA\u30A2\u30E0",
   year: "1999",
   genre: "J-Pop",
