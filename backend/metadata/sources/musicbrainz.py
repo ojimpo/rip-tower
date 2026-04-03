@@ -64,9 +64,26 @@ class MusicBrainzSource(MetadataSource):
                     if ac:
                         artist = ac[0].get("name", "") if isinstance(ac[0], dict) else str(ac[0])
 
+                    # Find which medium (disc) this disc ID matched
+                    media = release.get("media", [])
+                    total_discs = len(media)
+                    disc_number = 1
                     tracks = []
-                    for medium in release.get("media", []):
-                        for track in medium.get("tracks", []):
+
+                    for medium in media:
+                        # Check if this medium contains our disc ID
+                        medium_discids = [
+                            d.get("id", "") for d in medium.get("discs", [])
+                        ]
+                        if disc_id in medium_discids or len(media) == 1:
+                            disc_number = medium.get("position", 1)
+                            for track in medium.get("tracks", []):
+                                rec = track.get("recording", {})
+                                tracks.append(rec.get("title", track.get("title", "")))
+                            break
+                    else:
+                        # Fallback: use first medium
+                        for track in media[0].get("tracks", []) if media else []:
                             rec = track.get("recording", {})
                             tracks.append(rec.get("title", track.get("title", "")))
 
@@ -74,16 +91,21 @@ class MusicBrainzSource(MetadataSource):
                         "artist": artist,
                         "album": release.get("title", ""),
                         "year": (release.get("date") or "")[:4] or None,
+                        "genre": None,
                         "track_titles": json.dumps(
                             tracks[:track_count] if track_count else tracks,
                             ensure_ascii=False,
                         ),
                         "confidence": 90,
+                        "disc_number": disc_number,
+                        "total_discs": total_discs,
                         "source_url": f"https://musicbrainz.org/release/{release.get('id', '')}",
                         "evidence": json.dumps({
                             "match": "disc_id_exact",
                             "discid": disc_id,
                             "mb_release": release.get("id", ""),
+                            "disc_number": disc_number,
+                            "total_discs": total_discs,
                         }, ensure_ascii=False),
                     })
 

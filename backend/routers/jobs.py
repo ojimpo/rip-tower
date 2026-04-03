@@ -44,6 +44,16 @@ async def start_rip(
         source_type=request.source_type or "unknown",
     )
     session.add(job)
+
+    # Create initial JobMetadata with disc info from request
+    if request.disc_number or request.total_discs:
+        initial_meta = JobMetadata(
+            job_id=job_id,
+            disc_number=request.disc_number or 1,
+            total_discs=request.total_discs or 1,
+        )
+        session.add(initial_meta)
+
     await session.commit()
 
     # Trigger pipeline in background

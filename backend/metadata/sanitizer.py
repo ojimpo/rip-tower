@@ -67,8 +67,18 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     # Various Artists normalization
     artist = normalize_various_artists(artist)
 
-    # Disc info extraction
+    # Disc info extraction — prefer source data (e.g. MusicBrainz medium position)
     album_base, disc_number = extract_disc_info(album)
+    source_total_discs = None
+    if best.evidence:
+        try:
+            ev = json.loads(best.evidence)
+            if ev.get("disc_number"):
+                disc_number = disc_number or ev["disc_number"]
+            if ev.get("total_discs"):
+                source_total_discs = ev["total_discs"]
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     # Compilation detection from track titles
     is_compilation = False
@@ -180,9 +190,12 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
             existing.year = year
             existing.genre = genre
             existing.disc_number = disc_number or existing.disc_number or 1
-            # Preserve total_discs if already set to > 1 (e.g. from rip request)
-            if not (existing.total_discs and existing.total_discs > 1):
-                existing.total_discs = 1
+            # Use source total_discs > user-set total_discs > existing > 1
+            existing.total_discs = (
+                source_total_discs
+                or (existing.total_discs if existing.total_discs and existing.total_discs > 1 else None)
+                or 1
+            )
             existing.is_compilation = is_compilation
             existing.confidence = confidence
             existing.source = best.source
@@ -199,7 +212,7 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
                 year=year,
                 genre=genre,
                 disc_number=disc_number or 1,
-                total_discs=1,
+                total_discs=source_total_discs or 1,
                 is_compilation=is_compilation,
                 confidence=confidence,
                 source=best.source,
