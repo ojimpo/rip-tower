@@ -179,7 +179,10 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
             existing.album_base = album_base
             existing.year = year
             existing.genre = genre
-            existing.disc_number = disc_number or 1
+            existing.disc_number = disc_number or existing.disc_number or 1
+            # Preserve total_discs if already set to > 1 (e.g. from rip request)
+            if not (existing.total_discs and existing.total_discs > 1):
+                existing.total_discs = 1
             existing.is_compilation = is_compilation
             existing.confidence = confidence
             existing.source = best.source

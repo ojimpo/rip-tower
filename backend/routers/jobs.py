@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -108,7 +109,6 @@ async def import_wav(
     # Trigger metadata resolution
     from backend.services.pipeline import run_resolve_only
     import asyncio
-    from pathlib import Path
 
     asyncio.create_task(run_resolve_only(job_id, {
         "artist": artist_hint,
@@ -318,7 +318,6 @@ async def delete_job(
 
     # Clean up files
     from backend.config import get_config
-    from pathlib import Path
     import shutil
 
     config = get_config()
@@ -474,7 +473,6 @@ async def upload_wav_replacement(
         raise HTTPException(status_code=404, detail="Track not found")
 
     from backend.config import get_config
-    from pathlib import Path
 
     config = get_config()
     wav_dir = Path(config.output.incoming_dir) / job_id
@@ -584,7 +582,6 @@ async def upload_artwork(
 ):
     """Upload a custom artwork."""
     from backend.config import get_config
-    from pathlib import Path
     from PIL import Image
     import io
 

@@ -12,6 +12,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Track the hotplug watcher task to prevent duplicates
+_hotplug_task: asyncio.Task | None = None
+
 
 def _get_drive_info(dev_path: str) -> dict | None:
     """Get drive serial and model via udevadm or /sys fallback."""
@@ -136,8 +139,10 @@ async def start_monitoring() -> None:
         logger.info("Auto-rip triggered for drive %s (source_type=%s)", drive_id, source_type)
         await _trigger_auto_rip(drive_id, source_type)
 
-    # Start background hotplug watcher
-    asyncio.create_task(_watch_hotplug())
+    # Start background hotplug watcher (only if not already running)
+    global _hotplug_task
+    if _hotplug_task is None or _hotplug_task.done():
+        _hotplug_task = asyncio.create_task(_watch_hotplug())
 
 
 async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
@@ -164,6 +169,63 @@ async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
     logger.info("Auto-rip job %s created for drive %s", job_id, drive_id)
 
 
+async def _rescan_drives() -> None:
+    """Lightweight rescan: update drive paths and trigger auto-rip without spawning a new watcher."""
+    from backend.database import async_session
+    from backend.models import Drive, Job
+    from backend.services.websocket import broadcast
+    from sqlalchemy import select
+
+    auto_rip_candidates: list[tuple[str, str]] = []
+
+    async with async_session() as session:
+        # Mark all drives as disconnected
+        result = await session.execute(select(Drive))
+        for drive in result.scalars():
+            drive.current_path = None
+        await session.commit()
+
+        # Scan and update
+        for info in scan_drives():
+            result = await session.execute(
+                select(Drive).where(Drive.drive_id == info["serial"])
+            )
+            drive = result.scalar_one_or_none()
+            if drive:
+                drive.current_path = info["path"]
+                logger.info("Drive reconnected: %s (%s) at %s", drive.name, drive.drive_id, info["path"])
+            else:
+                drive = Drive(
+                    drive_id=info["serial"],
+                    name=info["model"] or info["serial"][:16],
+                    current_path=info["path"],
+                )
+                session.add(drive)
+                logger.info("New drive registered: %s at %s", info["serial"], info["path"])
+
+            await broadcast("drive:connected", {
+                "drive_id": drive.drive_id,
+                "name": drive.name,
+                "path": info["path"],
+            })
+
+            if drive.auto_rip:
+                active_job = await session.execute(
+                    select(Job)
+                    .where(Job.drive_id == drive.drive_id)
+                    .where(Job.status.notin_(["complete", "error"]))
+                    .limit(1)
+                )
+                if not active_job.scalar_one_or_none():
+                    auto_rip_candidates.append((drive.drive_id, drive.auto_rip_source_type))
+
+        await session.commit()
+
+    for drive_id, source_type in auto_rip_candidates:
+        logger.info("Auto-rip triggered for drive %s (source_type=%s)", drive_id, source_type)
+        await _trigger_auto_rip(drive_id, source_type)
+
+
 async def _watch_hotplug() -> None:
     """Monitor udev events for CD drive hotplug (add/remove)."""
     try:
@@ -177,6 +239,6 @@ async def _watch_hotplug() -> None:
             if re.search(r"(add|remove).*sr\d+", text):
                 logger.info("Drive hotplug event: %s", text)
                 await asyncio.sleep(1)  # Wait for device to settle
-                await start_monitoring()
+                await _rescan_drives()
     except Exception:
         logger.exception("Hotplug watcher failed")

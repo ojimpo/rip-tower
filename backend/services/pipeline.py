@@ -184,11 +184,21 @@ async def run_finalize(job_id: str) -> None:
 
 
 async def run_resolve_only(job_id: str, hints: dict) -> None:
-    """Run metadata resolution only (for imports and re-resolve)."""
+    """Run metadata resolution only (for imports and re-resolve).
+
+    After resolving, also encodes tracks so finalize has files to work with.
+    """
     try:
         from backend.metadata.resolver import resolve
 
         await resolve(job_id, None, hints, None)
+
+        # Encode tracks (WAV imports skip the rip+encode pipeline path)
+        await _update_status(job_id, "encoding")
+        from backend.services.encoder import encode_all
+
+        await encode_all(job_id)
+
         await _check_approval(job_id)
     except Exception as e:
         logger.exception("Resolve failed for job %s", job_id)
