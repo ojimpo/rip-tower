@@ -74,6 +74,15 @@ export const api = {
   skipKashidashi: (jobId: string) =>
     request(`/jobs/${jobId}/kashidashi/skip`, { method: "POST" }),
 
+  // Album groups
+  createGroup: (jobId: string) =>
+    request(`/jobs/${jobId}/group`, { method: "POST" }),
+  addToGroup: (jobId: string, groupId: string) =>
+    request(`/jobs/${jobId}/group/${groupId}`, { method: "PUT" }),
+  removeFromGroup: (jobId: string) =>
+    request(`/jobs/${jobId}/group`, { method: "DELETE" }),
+  getGroup: (groupId: string) => request(`/groups/${groupId}`),
+
   // Re-rip
   reRip: (jobId: string) =>
     request(`/jobs/${jobId}/re-rip`, { method: "POST" }),

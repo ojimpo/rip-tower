@@ -100,3 +100,51 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
     )
     logger.info("Disc identified: %s (%d tracks)", disc_id, track_count)
     return identity
+
+
+async def read_disc_identity_only(drive_id: str) -> DiscIdentity:
+    """Read disc identity without creating tracks or updating job.
+
+    Used for re-rip where tracks already exist in the DB.
+    """
+    async with async_session() as session:
+        drive = await session.get(Drive, drive_id)
+        if not drive or not drive.current_path:
+            raise RuntimeError(f"Drive {drive_id} not connected")
+        dev_path = drive.current_path
+
+    proc = await asyncio.create_subprocess_exec(
+        "cd-discid", dev_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"cd-discid failed: {stderr.decode().strip()}")
+
+    raw = stdout.decode().strip()
+    if not raw:
+        raise RuntimeError(f"cd-discid returned empty output for {dev_path}")
+
+    parts = raw.split()
+    if len(parts) < 4:
+        raise RuntimeError(f"cd-discid output malformed: {raw}")
+
+    disc_id = parts[0].lower()
+    track_count = int(parts[1])
+    offsets = [int(x) for x in parts[2:2 + track_count]]
+    leadout = int(parts[2 + track_count])
+    toc_hash = hashlib.sha256(raw.encode()).hexdigest()
+    total_seconds = leadout
+
+    identity = DiscIdentity(
+        disc_id=disc_id,
+        track_count=track_count,
+        offsets=offsets,
+        leadout=leadout,
+        toc_hash=toc_hash,
+        total_seconds=total_seconds,
+    )
+    logger.info("Disc identity read: %s (%d tracks)", disc_id, track_count)
+    return identity

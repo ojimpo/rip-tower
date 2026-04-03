@@ -100,6 +100,20 @@ export interface JobDetail {
   kashidashi_candidates: KashidashiCandidate[];
 }
 
+export interface GroupJob {
+  job_id: string;
+  status: string;
+  artist: string | null;
+  album: string | null;
+  disc_number: number | null;
+  total_discs: number | null;
+}
+
+export interface GroupResponse {
+  album_group: string;
+  jobs: GroupJob[];
+}
+
 export interface JobSummary {
   job_id: string;
   status: string;

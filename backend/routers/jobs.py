@@ -690,6 +690,91 @@ async def skip_kashidashi(
     return {"status": "skipped"}
 
 
+@router.post("/jobs/{job_id}/group")
+async def create_group(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create a new album_group UUID for this job."""
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    group_id = str(uuid.uuid4())
+    job.album_group = group_id
+    await session.commit()
+    return {"status": "created", "album_group": group_id}
+
+
+@router.put("/jobs/{job_id}/group/{group_id}")
+async def add_to_group(
+    job_id: str,
+    group_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Add job to an existing album group."""
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Verify that the group exists (at least one other job has it)
+    existing = await session.execute(
+        select(Job).where(Job.album_group == group_id).limit(1)
+    )
+    if not existing.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    job.album_group = group_id
+    await session.commit()
+    return {"status": "added", "album_group": group_id}
+
+
+@router.delete("/jobs/{job_id}/group")
+async def remove_from_group(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Remove job from its album group."""
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job.album_group = None
+    await session.commit()
+    return {"status": "removed"}
+
+
+@router.get("/groups/{group_id}")
+async def get_group(
+    group_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get all jobs in an album group."""
+    result = await session.execute(
+        select(Job).where(Job.album_group == group_id).order_by(Job.created_at)
+    )
+    jobs = result.scalars().all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    group_jobs = []
+    for job in jobs:
+        meta = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job.id)
+        )
+        meta = meta.scalar_one_or_none()
+        group_jobs.append({
+            "job_id": job.id,
+            "status": job.status,
+            "artist": meta.artist if meta else None,
+            "album": meta.album if meta else None,
+            "disc_number": meta.disc_number if meta else None,
+            "total_discs": meta.total_discs if meta else None,
+        })
+
+    return {"album_group": group_id, "jobs": group_jobs}
+
+
 @router.post("/jobs/{job_id}/re-rip/failed")
 async def re_rip_failed(
     job_id: str,

@@ -11,7 +11,7 @@ from typing import Any, Optional
 from sqlalchemy import select
 
 from backend.database import async_session
-from backend.models import Job, JobMetadata, Track
+from backend.models import Drive, Job, JobMetadata, Track
 from backend.schemas import RipRequest
 from backend.services.websocket import broadcast
 
@@ -207,13 +207,122 @@ async def run_resolve_only(job_id: str, hints: dict) -> None:
 
 async def run_re_rip(job_id: str, drive_id: str | None = None) -> None:
     """Re-rip all tracks of a job."""
-    # TODO: implement re-rip
-    logger.info("Re-rip requested for job %s", job_id)
+    try:
+        # 1. Get job and determine drive
+        async with async_session() as session:
+            job = await session.get(Job, job_id)
+            if not job:
+                raise RuntimeError(f"Job {job_id} not found")
+            effective_drive_id = drive_id or job.drive_id
+            if not effective_drive_id:
+                raise RuntimeError(f"No drive available for job {job_id}")
+
+        # 2. Get drive's current_path
+        async with async_session() as session:
+            drive = await session.get(Drive, effective_drive_id)
+            if not drive or not drive.current_path:
+                raise RuntimeError(f"Drive {effective_drive_id} not connected")
+
+        # 3. Acquire device lock
+        lock = _get_device_lock(effective_drive_id)
+        async with lock:
+            # 4. Update job status to ripping
+            await _update_status(job_id, "ripping")
+
+            # 5. Reset all tracks
+            async with async_session() as session:
+                tracks = await session.execute(
+                    select(Track).where(Track.job_id == job_id)
+                )
+                for t in tracks.scalars():
+                    t.rip_status = "pending"
+                    t.encode_status = "pending"
+                await session.commit()
+
+            # 6. Read disc identity (without creating new tracks)
+            from backend.services.disc_identity import read_disc_identity_only
+
+            identity = await read_disc_identity_only(effective_drive_id)
+
+            # 7. Rip all tracks
+            await _run_rip(job_id, effective_drive_id, identity)
+
+            # 8. Encode all tracks
+            await _update_status(job_id, "encoding")
+            from backend.services.encoder import encode_all
+
+            await encode_all(job_id)
+
+            # 9. Check approval
+            await _check_approval(job_id)
+
+    except Exception as e:
+        logger.exception("Re-rip failed for job %s", job_id)
+        await _update_status(job_id, "error", str(e))
+        await broadcast("job:error", {"job_id": job_id, "message": str(e)})
 
 
 async def run_re_rip_track(
     job_id: str, track_num: int, drive_id: str | None = None
 ) -> None:
     """Re-rip a specific track."""
-    # TODO: implement track-level re-rip
-    logger.info("Re-rip track %d requested for job %s", track_num, job_id)
+    try:
+        # 1. Get job and determine drive
+        async with async_session() as session:
+            job = await session.get(Job, job_id)
+            if not job:
+                raise RuntimeError(f"Job {job_id} not found")
+            effective_drive_id = drive_id or job.drive_id
+            if not effective_drive_id:
+                raise RuntimeError(f"No drive available for job {job_id}")
+
+        # 2. Get drive path and reset track status
+        from backend.config import get_config
+        from pathlib import Path
+
+        async with async_session() as session:
+            drive = await session.get(Drive, effective_drive_id)
+            if not drive or not drive.current_path:
+                raise RuntimeError(f"Drive {effective_drive_id} not connected")
+            dev_path = drive.current_path
+
+            track = await session.execute(
+                select(Track).where(
+                    Track.job_id == job_id, Track.track_num == track_num
+                )
+            )
+            track = track.scalar_one_or_none()
+            if not track:
+                raise RuntimeError(f"Track {track_num} not found for job {job_id}")
+
+            # 3. Reset track status
+            track.rip_status = "pending"
+            track.encode_status = "pending"
+
+            # Get total track count for progress reporting
+            all_tracks = await session.execute(
+                select(Track).where(Track.job_id == job_id)
+            )
+            total_tracks = len(all_tracks.scalars().all())
+            await session.commit()
+
+        # 4. Rip just that track
+        lock = _get_device_lock(effective_drive_id)
+        async with lock:
+            config = get_config()
+            output_dir = Path(config.output.incoming_dir) / job_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            from backend.services.ripper import _rip_track
+
+            await _rip_track(job_id, track_num, dev_path, output_dir, total_tracks)
+
+        # 5. Encode just that track
+        from backend.services.encoder import encode_all
+
+        await encode_all(job_id)
+
+    except Exception as e:
+        logger.exception("Re-rip track %d failed for job %s", track_num, job_id)
+        await _update_status(job_id, "error", str(e))
+        await broadcast("job:error", {"job_id": job_id, "message": str(e)})

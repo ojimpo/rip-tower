@@ -1,11 +1,11 @@
 import { useParams, Link } from "react-router-dom";
 import { useState, useRef, useCallback } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useJob } from "../hooks/useJob";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { api } from "../lib/api";
 import EditableField from "../components/EditableField";
-import type { Track } from "../lib/types";
+import type { Track, GroupResponse, JobSummary } from "../lib/types";
 
 type Tab = "metadata" | "artwork" | "lyrics" | "kashidashi";
 
@@ -22,6 +22,8 @@ export default function JobDetail() {
   const artworkInputRef = useRef<HTMLInputElement>(null);
   const wavInputRef = useRef<HTMLInputElement>(null);
   const [wavTrack, setWavTrack] = useState<number | null>(null);
+  const [groupSectionOpen, setGroupSectionOpen] = useState(false);
+  const [groupPickerOpen, setGroupPickerOpen] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -116,6 +118,47 @@ export default function JobDetail() {
     mutationFn: ({ trackNum, file }: { trackNum: number; file: File }) =>
       api.importWav(jobId, trackNum, file),
     onSuccess: invalidateJob,
+  });
+
+  // Album group queries — only fetch when we have data
+  const albumGroup = data?.job?.album_group ?? null;
+
+  const groupQuery = useQuery({
+    queryKey: ["group", albumGroup],
+    queryFn: () => api.getGroup(albumGroup!) as Promise<GroupResponse>,
+    enabled: !!albumGroup,
+  });
+
+  const recentJobsQuery = useQuery({
+    queryKey: ["jobs", "for-group-picker"],
+    queryFn: () => api.getJobs() as Promise<{ jobs: JobSummary[] }>,
+    enabled: groupPickerOpen,
+  });
+
+  const createGroupMutation = useMutation({
+    mutationFn: () => api.createGroup(jobId),
+    onSuccess: () => {
+      invalidateJob();
+      queryClient.invalidateQueries({ queryKey: ["group"] });
+    },
+  });
+
+  const addToGroupMutation = useMutation({
+    mutationFn: ({ targetJobId, groupId }: { targetJobId: string; groupId: string }) =>
+      api.addToGroup(targetJobId, groupId),
+    onSuccess: () => {
+      invalidateJob();
+      queryClient.invalidateQueries({ queryKey: ["group"] });
+      setGroupPickerOpen(false);
+    },
+  });
+
+  const removeFromGroupMutation = useMutation({
+    mutationFn: () => api.removeFromGroup(jobId),
+    onSuccess: () => {
+      invalidateJob();
+      queryClient.invalidateQueries({ queryKey: ["group"] });
+    },
   });
 
   if (isLoading) return <div className="p-4 text-gray-400">{"\u8AAD\u307F\u8FBC\u307F\u4E2D"}...</div>;
@@ -263,6 +306,165 @@ export default function JobDetail() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Album Group */}
+          <div className="mx-4 mb-3">
+            <button
+              onClick={() => setGroupSectionOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-[#16213e] border border-white/5 hover:border-white/10 transition"
+            >
+              <span className="text-xs font-semibold text-gray-400">
+                Album Group
+                {job.album_group && (
+                  <span className="ml-2 font-mono text-[10px] text-gray-500">
+                    {job.album_group.slice(0, 8)}
+                  </span>
+                )}
+              </span>
+              <svg
+                className={`w-4 h-4 text-gray-500 transition-transform ${groupSectionOpen ? "rotate-180" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {groupSectionOpen && (
+              <div className="mt-1 rounded-lg bg-[#16213e] border border-white/5 p-3">
+                {job.album_group ? (
+                  <>
+                    {/* Group members */}
+                    {groupQuery.data && (
+                      <div className="space-y-1.5 mb-3">
+                        {groupQuery.data.jobs.map((gj) => (
+                          <Link
+                            key={gj.job_id}
+                            to={`/job/${gj.job_id}`}
+                            className={`flex items-center justify-between px-2.5 py-2 rounded-lg transition text-xs ${
+                              gj.job_id === jobId
+                                ? "bg-[#e94560]/10 border border-[#e94560]/20"
+                                : "bg-white/5 hover:bg-white/10"
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <span className="text-gray-300 font-medium">
+                                Disc {gj.disc_number ?? "?"}
+                              </span>
+                              <span className="text-gray-500 ml-1.5">
+                                {gj.artist} / {gj.album}
+                              </span>
+                            </div>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ml-2 ${
+                                gj.status === "complete"
+                                  ? "bg-emerald-500/20 text-emerald-400"
+                                  : gj.status === "error"
+                                    ? "bg-red-500/20 text-red-400"
+                                    : "bg-gray-500/20 text-gray-400"
+                              }`}
+                            >
+                              {gj.status}
+                            </span>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setGroupPickerOpen(true)}
+                        className="flex-1 text-[11px] font-medium py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 transition"
+                      >
+                        {"\u30C7\u30A3\u30B9\u30AF\u8FFD\u52A0"}
+                      </button>
+                      <button
+                        onClick={() => removeFromGroupMutation.mutate()}
+                        disabled={removeFromGroupMutation.isPending}
+                        className="flex-1 text-[11px] font-medium py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition disabled:opacity-50"
+                      >
+                        {removeFromGroupMutation.isPending ? "..." : "\u30B0\u30EB\u30FC\u30D7\u89E3\u9664"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => createGroupMutation.mutate()}
+                      disabled={createGroupMutation.isPending}
+                      className="flex-1 text-[11px] font-medium py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 transition disabled:opacity-50"
+                    >
+                      {createGroupMutation.isPending ? "..." : "\u30B0\u30EB\u30FC\u30D7\u4F5C\u6210"}
+                    </button>
+                    <button
+                      onClick={() => setGroupPickerOpen(true)}
+                      className="flex-1 text-[11px] font-medium py-1.5 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 transition"
+                    >
+                      {"\u65E2\u5B58\u30B0\u30EB\u30FC\u30D7\u306B\u8FFD\u52A0"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Group picker modal */}
+                {groupPickerOpen && (
+                  <div className="mt-3 border-t border-white/5 pt-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] text-gray-400 font-medium">
+                        {job.album_group ? "\u30B0\u30EB\u30FC\u30D7\u306B\u8FFD\u52A0\u3059\u308B\u30B8\u30E7\u30D6\u3092\u9078\u629E" : "\u30B0\u30EB\u30FC\u30D7\u306E\u3042\u308B\u30B8\u30E7\u30D6\u3092\u9078\u629E"}
+                      </span>
+                      <button
+                        onClick={() => setGroupPickerOpen(false)}
+                        className="text-[10px] text-gray-500 hover:text-gray-300"
+                      >
+                        {"\u9589\u3058\u308B"}
+                      </button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {recentJobsQuery.data?.jobs
+                        .filter((rj) => rj.job_id !== jobId)
+                        .filter(() => true)
+                        .map((rj) => (
+                          <button
+                            key={rj.job_id}
+                            onClick={() => {
+                              if (job.album_group) {
+                                // Add picked job to this job's group
+                                addToGroupMutation.mutate({
+                                  targetJobId: rj.job_id,
+                                  groupId: job.album_group!,
+                                });
+                              } else {
+                                // First, create group for this job, then we need the group_id
+                                // Simpler: use createGroup then addToGroup
+                                (api.createGroup(jobId) as Promise<{ album_group: string }>).then(
+                                  (res) => {
+                                    addToGroupMutation.mutate({
+                                      targetJobId: rj.job_id,
+                                      groupId: res.album_group,
+                                    });
+                                  }
+                                );
+                              }
+                            }}
+                            disabled={addToGroupMutation.isPending}
+                            className="w-full text-left px-2.5 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition text-xs disabled:opacity-50"
+                          >
+                            <span className="text-gray-300">{rj.artist || "?"}</span>
+                            <span className="text-gray-500"> / {rj.album || "?"}</span>
+                            <span className="text-gray-600 ml-1.5 text-[10px]">[{rj.status}]</span>
+                          </button>
+                        ))}
+                      {recentJobsQuery.isLoading && (
+                        <p className="text-[11px] text-gray-500 text-center py-2">{"\u8AAD\u307F\u8FBC\u307F\u4E2D"}...</p>
+                      )}
+                      {recentJobsQuery.data?.jobs.filter((rj) => rj.job_id !== jobId).length === 0 && (
+                        <p className="text-[11px] text-gray-500 text-center py-2">{"\u4ED6\u306E\u30B8\u30E7\u30D6\u304C\u3042\u308A\u307E\u305B\u3093"}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Source Info */}
