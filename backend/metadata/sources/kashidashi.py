@@ -178,24 +178,47 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
 
         score = 0
 
-        # Album matching
+        # Album matching — check both exact containment and fuzzy similarity
+        best_album_sim = 0.0
         for field_val in [it.get("title", ""), it.get("metadata_album", "")]:
             fn = norm(field_val)
-            if fn and album_n and (album_n == fn or album_n in fn or fn in album_n):
+            if not fn or not album_n:
+                continue
+            if album_n == fn or album_n in fn or fn in album_n:
                 score += 3
+                best_album_sim = 1.0
                 break
+            sim = similarity(album_n, fn)
+            best_album_sim = max(best_album_sim, sim)
 
-        # Artist matching
+        if best_album_sim >= 0.6 and score == 0:
+            score += 2  # fuzzy album match
+
+        # Artist matching — check containment, fuzzy similarity,
+        # and handle romanization differences (e.g. "THE CHECKERS" vs "チェッカーズ")
+        best_artist_sim = 0.0
         for field_val in [it.get("artist", ""), it.get("metadata_artist", "")]:
             fn = norm(field_val)
-            if fn and artist_n and (artist_n in fn or fn in artist_n):
-                score += 1
+            if not fn or not artist_n:
+                continue
+            if artist_n == fn or artist_n in fn or fn in artist_n:
+                score += 2
+                best_artist_sim = 1.0
                 break
+            sim = similarity(artist_n, fn)
+            best_artist_sim = max(best_artist_sim, sim)
+
+        if best_artist_sim >= 0.5 and score > 0:
+            score += 1  # partial artist match when album already matched
 
         # Track count bonus
         item_tc = it.get("metadata_track_count")
         if item_tc and track_count and int(item_tc) == int(track_count):
             score += 3
+
+        # Strong album match + track count = likely correct even with different artist name format
+        if best_album_sim >= 0.7 and item_tc and track_count and int(item_tc) == int(track_count):
+            score += 2
 
         if score > 0:
             scored.append((score, it))
