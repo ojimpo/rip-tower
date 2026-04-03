@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { HistoryItem } from "../lib/types";
 
-type SourceFilter = "" | "kashidashi" | "owned" | "unknown";
+type SourceFilter = "" | "library" | "owned" | "unknown";
 
 interface HistoryResponse {
   items: HistoryItem[];
@@ -33,7 +33,7 @@ export default function History() {
 
   const filters: { key: SourceFilter; label: string }[] = [
     { key: "", label: "\u5168\u3066" },
-    { key: "kashidashi", label: "\u56F3\u66F8\u9928" },
+    { key: "library", label: "\u56F3\u66F8\u9928" },
     { key: "owned", label: "\u624B\u6301\u3061" },
     { key: "unknown", label: "\u672A\u5206\u985E" },
   ];
@@ -54,10 +54,10 @@ export default function History() {
   }, [history]);
 
   const sourceTypeBadge = (item: HistoryItem) => {
-    if (item.source_type === "kashidashi") {
+    if (item.source_type === "library") {
       return (
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">
-          kashidashi{item.kashidashi_id ? ` #${item.kashidashi_id}` : ""}
+          図書館{item.kashidashi_id ? ` #${item.kashidashi_id}` : ""}
         </span>
       );
     }
@@ -119,7 +119,7 @@ export default function History() {
                 <p className="text-[10px] text-gray-500 tracking-wider mt-0.5">{"\u5168\u3066"}</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-blue-400">{stats.by_source_type.kashidashi || 0}</p>
+                <p className="text-2xl font-bold text-blue-400">{stats.by_source_type.library || 0}</p>
                 <p className="text-[10px] text-gray-500 tracking-wider mt-0.5">{"\u56F3\u66F8\u9928"}</p>
               </div>
               <div>

@@ -12,7 +12,7 @@ import unicodedata
 # ── Disc pattern ──
 
 DISC_PAT = re.compile(
-    r"[\s\-_]*(?:\[?\s*(?:disc|cd)\s*[-_\s]*(\d+)\s*\]?)",
+    r"[\s\-_]*(?:\[?\s*(?:disc|disk|cd)\s*[-_\s]*(\d+)\s*\]?)",
     re.IGNORECASE,
 )
 
