@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
         "auto_approve_threshold": 85,
         "reminder_initial_hours": 6,
         "reminder_interval_hours": 24,
+        "base_url": "",
     },
     "output": {
         "format": "flac",
@@ -29,6 +30,7 @@ DEFAULT_CONFIG = {
         "discord_webhook": "",
         "discogs_token": "",
         "musixmatch_token": "",
+        "plex_url": "",
         "plex_section_id": None,
         "llm_api_key": "",
         "llm_model": "haiku",
@@ -41,6 +43,7 @@ class GeneralConfig(BaseModel):
     auto_approve_threshold: int = 85
     reminder_initial_hours: int = 6
     reminder_interval_hours: int = 24
+    base_url: str = ""
 
 
 class OutputConfig(BaseModel):
@@ -56,6 +59,7 @@ class IntegrationsConfig(BaseModel):
     discord_webhook: str = ""
     discogs_token: str = ""
     musixmatch_token: str = ""
+    plex_url: str = ""
     plex_section_id: Optional[int] = None
     llm_api_key: str = ""
     llm_model: str = "haiku"

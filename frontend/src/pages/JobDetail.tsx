@@ -204,7 +204,9 @@ export default function JobDetail() {
                   />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-purple-900/60 to-pink-900/60 flex items-center justify-center">
-                    {"\uD83C\uDFB5"}
+                    <svg className="w-10 h-10 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
                   </div>
                 )}
               </div>
@@ -240,8 +242,23 @@ export default function JobDetail() {
                     onSave={(v) => updateMetadataMutation.mutate({ genre: v })}
                   />
                   <span className="text-gray-700">·</span>
-                  <span className="text-xs text-gray-500">
-                    Disc {metadata?.disc_number || 1}/{metadata?.total_discs || 1}
+                  <span className="text-xs text-gray-500 flex items-center gap-1">
+                    Disc{" "}
+                    <EditableField
+                      value={String(metadata?.disc_number || 1)}
+                      placeholder="#"
+                      className="text-xs text-gray-500"
+                      inputClassName="text-xs w-8 text-center"
+                      onSave={(v) => updateMetadataMutation.mutate({ disc_number: parseInt(v) || 1 })}
+                    />
+                    /
+                    <EditableField
+                      value={String(metadata?.total_discs || 1)}
+                      placeholder="#"
+                      className="text-xs text-gray-500"
+                      inputClassName="text-xs w-8 text-center"
+                      onSave={(v) => updateMetadataMutation.mutate({ total_discs: parseInt(v) || 1 })}
+                    />
                   </span>
                 </div>
               </div>
@@ -330,8 +347,8 @@ export default function JobDetail() {
                         </span>
                       )}
                     </span>
-                    <span className="text-center">{statusIcon(t.rip_status)}</span>
-                    <span className="text-center">{statusIcon(t.encode_status)}</span>
+                    <span className="text-center"><StatusIcon status={t.rip_status} /></span>
+                    <span className="text-center"><StatusIcon status={t.encode_status} /></span>
                   </div>
                 ))}
               </div>
@@ -342,9 +359,9 @@ export default function JobDetail() {
           {(failedTracks.length > 0 || degradedTracks.length > 0) && (
             <div className="mx-4 mb-3 rounded-lg bg-red-950/20 border border-red-500/20 px-3 py-3">
               <p className="text-xs text-red-300 mb-2">
-                {failedTracks.length > 0 && `\u274C \u5931\u6557\u30C8\u30E9\u30C3\u30AF: ${failedTracks.length}\u4EF6`}
+                {failedTracks.length > 0 && `\u5931\u6557\u30C8\u30E9\u30C3\u30AF: ${failedTracks.length}\u4EF6`}
                 {failedTracks.length > 0 && degradedTracks.length > 0 && " / "}
-                {degradedTracks.length > 0 && `\u26A0\uFE0F \u54C1\u8CEA\u4F4E\u4E0B: ${degradedTracks.length}\u4EF6`}
+                {degradedTracks.length > 0 && `\u54C1\u8CEA\u4F4E\u4E0B: ${degradedTracks.length}\u4EF6`}
               </p>
               <div className="flex gap-2">
                 <button
@@ -400,7 +417,7 @@ export default function JobDetail() {
               disabled={reResolveMutation.isPending}
               className="w-full text-xs font-medium py-2 rounded-lg bg-white/5 text-gray-400 hover:bg-white/10 transition disabled:opacity-50"
             >
-              {reResolveMutation.isPending ? "\u518D\u691C\u7D22\u4E2D..." : "\uD83D\uDD04 \u30E1\u30BF\u30C7\u30FC\u30BF\u3092\u518D\u691C\u7D22"}
+              {reResolveMutation.isPending ? "\u518D\u691C\u7D22\u4E2D..." : "\u30E1\u30BF\u30C7\u30FC\u30BF\u3092\u518D\u691C\u7D22"}
             </button>
           </div>
 
@@ -465,7 +482,7 @@ export default function JobDetail() {
                 disabled={approveMutation.isPending}
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
               >
-                {approveMutation.isPending ? "\u627F\u8A8D\u4E2D..." : "\u2705 \u627F\u8A8D\u3057\u3066\u5B8C\u4E86"}
+                {approveMutation.isPending ? "\u627F\u8A8D\u4E2D..." : "\u627F\u8A8D\u3057\u3066\u5B8C\u4E86"}
               </button>
               {approveMutation.isError && (
                 <p className="text-xs text-red-400 mt-2 text-center">
@@ -490,7 +507,9 @@ export default function JobDetail() {
                   {a.url ? (
                     <img src={a.url} alt="" className="w-full h-full object-cover" />
                   ) : (
-                    <span className="text-6xl">{"\uD83C\uDFB5"}</span>
+                    <svg className="w-16 h-16 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
                   )}
                 </div>
                 <div className="px-3 py-2 flex items-center justify-between">
@@ -521,7 +540,9 @@ export default function JobDetail() {
                     {a.url ? (
                       <img src={a.url} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      <span className="text-4xl">{"\uD83C\uDFB5"}</span>
+                      <svg className="w-10 h-10 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                      </svg>
                     )}
                   </div>
                   <div className="px-2.5 py-2">
@@ -750,14 +771,36 @@ export default function JobDetail() {
   );
 }
 
-function statusIcon(status: string): string {
+function StatusIcon({ status }: { status: string }) {
   switch (status) {
-    case "ok": return "\u2705";
-    case "ok_degraded": return "\u26A0\uFE0F";
-    case "failed": return "\u274C";
+    case "ok":
+      return (
+        <svg className="w-3.5 h-3.5 text-emerald-400 inline-block" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      );
+    case "ok_degraded":
+      return (
+        <svg className="w-3.5 h-3.5 text-amber-400 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      );
+    case "failed":
+      return (
+        <svg className="w-3.5 h-3.5 text-red-400 inline-block" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+        </svg>
+      );
     case "ripping":
-    case "encoding": return "\uD83D\uDD04";
-    default: return "\u25CB";
+    case "encoding":
+      return (
+        <svg className="w-3.5 h-3.5 text-blue-400 animate-spin inline-block" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      );
+    default:
+      return <span className="w-2 h-2 rounded-full bg-gray-600 inline-block" />;
   }
 }
 

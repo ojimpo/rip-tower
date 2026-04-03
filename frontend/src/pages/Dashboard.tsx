@@ -70,6 +70,8 @@ export default function Dashboard() {
   const [ripHintArtist, setRipHintArtist] = useState("");
   const [ripHintAlbum, setRipHintAlbum] = useState("");
   const [ripHintCatalog, setRipHintCatalog] = useState("");
+  const [ripDiscNumber, setRipDiscNumber] = useState<string>("");
+  const [ripTotalDiscs, setRipTotalDiscs] = useState<string>("");
   const [ripError, setRipError] = useState<string | null>(null);
 
   const ripMutation = useMutation({
@@ -104,6 +106,8 @@ export default function Dashboard() {
       drive_id: ripDialog.driveId,
       source_type: ripSourceType,
       hints: Object.keys(hints).length > 0 ? hints : undefined,
+      disc_number: ripDiscNumber ? parseInt(ripDiscNumber) : undefined,
+      total_discs: ripTotalDiscs ? parseInt(ripTotalDiscs) : undefined,
     });
   };
 
@@ -113,6 +117,8 @@ export default function Dashboard() {
     setRipHintArtist("");
     setRipHintAlbum("");
     setRipHintCatalog("");
+    setRipDiscNumber("");
+    setRipTotalDiscs("");
     setRipError(null);
   };
 
@@ -175,8 +181,16 @@ export default function Dashboard() {
                   i < needsAttention.length - 1 ? "border-b border-white/5" : ""
                 }`}
               >
-                <span className="text-lg mt-0.5">
-                  {job.status === "error" ? "\u274C" : "\u23F8\uFE0F"}
+                <span className="mt-0.5">
+                  {job.status === "error" ? (
+                    <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm font-medium truncate ${job.status === "error" ? "text-red-300" : "text-amber-200"}`}>
@@ -216,8 +230,16 @@ export default function Dashboard() {
                 className="block rounded-xl bg-[#16213e] border border-white/5 overflow-hidden hover:border-white/10 transition mb-3"
               >
                 <div className={`px-4 py-3 flex items-center gap-3 ${showTrackProgress ? "border-b border-white/5" : ""}`}>
-                  <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${colors.gradient} flex items-center justify-center text-lg`}>
-                    {job.status === "ripping" ? "\u25B6\uFE0F" : "\uD83C\uDFB5"}
+                  <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${colors.gradient} flex items-center justify-center`}>
+                    {job.status === "ripping" ? (
+                      <svg className="w-5 h-5 text-emerald-300" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                      </svg>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -295,9 +317,16 @@ export default function Dashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">{drive.name}</span>
-                          {drive.has_disc && <span className="text-lg" title="CD inserted">{"\uD83D\uDCBF"}</span>}
+                          {drive.has_disc && (
+                            <span title="CD inserted">
+                              <svg className="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="10" strokeWidth="1.5" />
+                                <circle cx="12" cy="12" r="3" strokeWidth="1.5" />
+                              </svg>
+                            </span>
+                          )}
                           {isOnline && !drive.has_disc && (
-                            <span className="text-xs text-gray-600">{"\u7A7A"}</span>
+                              <span className="text-xs text-gray-600">{"\u7A7A"}</span>
                           )}
                           {drive.auto_rip && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e94560]/15 text-[#e94560] font-medium">
@@ -370,10 +399,12 @@ export default function Dashboard() {
                             e.preventDefault();
                             api.ejectDrive(drive.drive_id);
                           }}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition text-lg"
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
                           title="Eject"
                         >
-                          {"\u23CF"}
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />
+                          </svg>
                         </button>
                       )}
                     </div>
@@ -394,7 +425,11 @@ export default function Dashboard() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">{ripDialog.driveName} - Rip</h3>
-              <button onClick={() => setRipDialog(null)} className="text-gray-500 hover:text-white transition text-lg">{"\u2715"}</button>
+              <button onClick={() => setRipDialog(null)} className="text-gray-500 hover:text-white transition">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
             {/* Source Type */}
@@ -441,6 +476,26 @@ export default function Dashboard() {
                 placeholder={"\u54C1\u756A (Catalog Number)"}
                 className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
               />
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500 shrink-0">Disc</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={ripDiscNumber}
+                  onChange={(e) => setRipDiscNumber(e.target.value)}
+                  placeholder="#"
+                  className="w-16 bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560] text-center"
+                />
+                <span className="text-gray-600">/</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={ripTotalDiscs}
+                  onChange={(e) => setRipTotalDiscs(e.target.value)}
+                  placeholder="Total"
+                  className="w-16 bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560] text-center"
+                />
+              </div>
             </div>
 
             {ripError && (
@@ -469,11 +524,13 @@ export default function Dashboard() {
                 to={`/job/${job.job_id}`}
                 className="flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition"
               >
-                <div className="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-2xl shrink-0 overflow-hidden">
+                <div className="w-10 h-10 rounded bg-gray-700 flex items-center justify-center shrink-0 overflow-hidden">
                   {job.artwork_url ? (
                     <img src={job.artwork_url} alt="" className="w-full h-full object-cover" />
                   ) : (
-                    "\uD83C\uDFB6"
+                    <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -486,7 +543,9 @@ export default function Dashboard() {
                     {job.track_count && `${job.track_count} tracks · `}FLAC · {elapsedText(job.updated_at)}
                   </p>
                 </div>
-                <span className="text-emerald-400 text-xs">{"\u2713"}</span>
+                <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
               </Link>
             ))}
           </div>
@@ -498,7 +557,10 @@ export default function Dashboard() {
 
       {jobs.length === 0 && (
         <div className="mx-4 mt-16 text-center text-gray-500">
-          <p className="text-4xl mb-3">{"\uD83D\uDCBF"}</p>
+          <svg className="w-12 h-12 mx-auto mb-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" strokeWidth="1.5" />
+            <circle cx="12" cy="12" r="3" strokeWidth="1.5" />
+          </svg>
           <p className="text-sm">CD{"\u3092\u5165\u308C\u3066\u30EA\u30C3\u30D4\u30F3\u30B0\u3092\u958B\u59CB"}</p>
         </div>
       )}

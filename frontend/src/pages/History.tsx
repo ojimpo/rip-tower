@@ -33,8 +33,8 @@ export default function History() {
 
   const filters: { key: SourceFilter; label: string }[] = [
     { key: "", label: "\u5168\u3066" },
-    { key: "kashidashi", label: "\uD83D\uDCDA \u56F3\u66F8\u9928" },
-    { key: "owned", label: "\uD83D\uDCBF \u624B\u6301\u3061" },
+    { key: "kashidashi", label: "\u56F3\u66F8\u9928" },
+    { key: "owned", label: "\u624B\u6301\u3061" },
     { key: "unknown", label: "\u672A\u5206\u985E" },
   ];
 
@@ -57,14 +57,14 @@ export default function History() {
     if (item.source_type === "kashidashi") {
       return (
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">
-          {"\uD83D\uDCDA"} kashidashi{item.kashidashi_id ? ` #${item.kashidashi_id}` : ""}
+          kashidashi{item.kashidashi_id ? ` #${item.kashidashi_id}` : ""}
         </span>
       );
     }
     if (item.source_type === "owned") {
       return (
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400">
-          {"\uD83D\uDCBF"} {"\u624B\u6301\u3061"}
+          {"\u624B\u6301\u3061"}
         </span>
       );
     }
@@ -150,11 +150,13 @@ export default function History() {
                   to={`/job/${item.job_id}`}
                   className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 transition"
                 >
-                  <div className="w-11 h-11 rounded-lg bg-gradient-to-br from-pink-900/50 to-purple-900/50 flex items-center justify-center text-xl shrink-0 overflow-hidden">
+                  <div className="w-11 h-11 rounded-lg bg-gradient-to-br from-pink-900/50 to-purple-900/50 flex items-center justify-center shrink-0 overflow-hidden">
                     {item.artwork_url ? (
                       <img src={item.artwork_url} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      "\uD83C\uDFB6"
+                      <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                      </svg>
                     )}
                   </div>
                   <div className="flex-1 min-w-0">

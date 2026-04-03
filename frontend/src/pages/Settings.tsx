@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import type { Drive } from "../lib/types";
 
 interface AppConfig {
-  general: { auto_approve_threshold: number; reminder_initial_hours: number; reminder_interval_hours: number };
+  general: { auto_approve_threshold: number; reminder_initial_hours: number; reminder_interval_hours: number; base_url: string };
   output: { format: string; quality: number; music_dir: string; incoming_dir: string; folder_template: string; file_template: string };
   integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string };
 }
@@ -184,6 +184,19 @@ export default function Settings() {
               </div>
               <p className="text-[10px] text-gray-600 mt-1">Set to 0 to disable reminders</p>
             </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1.5 block">Base URL</label>
+              <input
+                type="url"
+                value={cfg.general.base_url}
+                onChange={(e) => updateConfig((c) => ({
+                  ...c, general: { ...c.general, base_url: e.target.value },
+                }))}
+                placeholder="https://rip-tower.example.com"
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+              />
+              <p className="text-[10px] text-gray-600 mt-1">Used for Discord notification links (leave empty for relative URLs)</p>
+            </div>
           </div>
         </details>
 
@@ -352,7 +365,7 @@ export default function Settings() {
               <p className="text-[10px] text-gray-600 mt-1">Used only when rule-based processing cannot resolve metadata issues</p>
             </div>
             <div className="pt-2 border-t border-white/5">
-              <label className="text-xs text-gray-400 mb-1.5 block">{"\uD83D\uDCDA"} kashidashi ({"\u56F3\u66F8\u9928CD\u7BA1\u7406"})</label>
+              <label className="text-xs text-gray-400 mb-1.5 block">kashidashi ({"\u56F3\u66F8\u9928CD\u7BA1\u7406"})</label>
               <div>
                 <label className="text-[10px] text-gray-500 block mb-1">API URL</label>
                 <input
@@ -503,10 +516,10 @@ export default function Settings() {
             {saveMutation.isPending ? "Saving..." : "Save Changes"}
           </button>
           {saveStatus === "saved" && (
-            <p className="text-xs text-emerald-400 text-center mt-2">{"\u2705"} Saved successfully</p>
+            <p className="text-xs text-emerald-400 text-center mt-2">Saved successfully</p>
           )}
           {saveStatus === "error" && (
-            <p className="text-xs text-red-400 text-center mt-2">{"\u274C"} Save failed</p>
+            <p className="text-xs text-red-400 text-center mt-2">Save failed</p>
           )}
         </div>
       </div>

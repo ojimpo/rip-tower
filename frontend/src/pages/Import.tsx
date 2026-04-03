@@ -112,7 +112,9 @@ export default function Import() {
           </div>
         </header>
         <div className="mx-4 mt-16 text-center">
-          <p className="text-4xl mb-4">&#10003;</p>
+          <svg className="w-12 h-12 mx-auto mb-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
           <p className="text-lg font-medium text-emerald-400 mb-2">Import started</p>
           <p className="text-sm text-gray-400 mb-6">
             {files.length} files submitted for processing

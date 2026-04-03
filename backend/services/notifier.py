@@ -16,6 +16,15 @@ from backend.models import Job, JobMetadata
 logger = logging.getLogger(__name__)
 
 
+def _job_url(job_id: str) -> str:
+    """Build a full or relative URL for a job."""
+    config = get_config()
+    base = config.general.base_url.rstrip("/")
+    if base:
+        return f"{base}/job/{job_id}"
+    return f"/job/{job_id}"
+
+
 async def _send_discord(content: str) -> None:
     """Send a message to Discord via webhook."""
     config = get_config()
@@ -72,7 +81,7 @@ async def notify_complete(job_id: str) -> None:
     album = meta.album if meta else "Unknown"
 
     await _send_discord(
-        f"✅ 完了：{artist} / {album}\n🔗 /job/{job_id}"
+        f"完了：{artist} / {album}\n{_job_url(job_id)}"
     )
 
 
@@ -88,13 +97,13 @@ async def notify_review(job_id: str) -> None:
     album = meta.album if meta else "不明なアルバム"
 
     await _send_discord(
-        f"⚠️ メタデータ要確認：{album}（confidence:{confidence}）\n🔗 /job/{job_id}"
+        f"メタデータ要確認：{album}（confidence:{confidence}）\n{_job_url(job_id)}"
     )
 
 
 async def notify_error(job_id: str, message: str) -> None:
     """Notify that a job failed."""
-    await _send_discord(f"❌ エラー：{message}\n🔗 /job/{job_id}")
+    await _send_discord(f"エラー：{message}\n{_job_url(job_id)}")
 
 
 async def schedule_reminder(job_id: str) -> None:
@@ -131,17 +140,19 @@ async def schedule_reminder(job_id: str) -> None:
             job, meta = pending[0]
             album = meta.album if meta else "不明"
             await _send_discord(
-                f"⏰ 未承認ジョブ（1件）：{album}\n🔗 /job/{job.id}"
+                f"未承認ジョブ（1件）：{album}\n{_job_url(job.id)}"
             )
         else:
             lines = []
             for job, meta in pending:
                 album = meta.album if meta else "不明"
                 lines.append(f"  - {album}")
+            config = get_config()
+            base = config.general.base_url.rstrip("/") or ""
             await _send_discord(
-                f"⏰ 未承認ジョブ（{len(pending)}件）\n"
+                f"未承認ジョブ（{len(pending)}件）\n"
                 + "\n".join(lines)
-                + "\n🔗 /"
+                + f"\n{base}/"
             )
 
         await asyncio.sleep(interval_hours * 3600)
