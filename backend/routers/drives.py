@@ -143,3 +143,61 @@ async def eject_drive(
         )
 
     return {"status": "ejected", "drive_id": drive_id}
+
+
+@router.post("/drives/{drive_id}/identify")
+async def identify_disc(
+    drive_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Read disc identity and do a quick metadata lookup without starting a full rip."""
+    drive = await session.get(Drive, drive_id)
+    if not drive:
+        raise HTTPException(status_code=404, detail="Drive not found")
+    if not drive.current_path:
+        raise HTTPException(status_code=400, detail="Drive not connected")
+
+    # Run cd-discid
+    proc = await asyncio.create_subprocess_exec(
+        "cd-discid", drive.current_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"cd-discid failed: {stderr.decode().strip()}")
+
+    parts = stdout.decode().strip().split()
+    disc_id = parts[0].lower() if parts else "unknown"
+    track_count = int(parts[1]) if len(parts) > 1 else 0
+
+    # Quick MusicBrainz lookup
+    import httpx
+    artist = None
+    album = None
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "RipTower/0.1.0"},
+            timeout=10,
+        ) as client:
+            resp = await client.get(
+                f"https://musicbrainz.org/ws/2/discid/{disc_id}",
+                params={"fmt": "json", "inc": "artist-credits"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                releases = data.get("releases", [])
+                if releases:
+                    rel = releases[0]
+                    artist = rel.get("artist-credit", [{}])[0].get("name", "") if rel.get("artist-credit") else None
+                    album = rel.get("title")
+    except Exception:
+        pass
+
+    return {
+        "disc_id": disc_id,
+        "track_count": track_count,
+        "artist": artist,
+        "album": album,
+    }

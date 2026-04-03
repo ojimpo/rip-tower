@@ -94,6 +94,8 @@ export const api = {
     request(`/drives/${driveId}`, { method: "PUT", body: JSON.stringify(body) }),
   ejectDrive: (driveId: string) =>
     request(`/drives/${driveId}/eject`, { method: "POST" }),
+  identifyDisc: (driveId: string) =>
+    request(`/drives/${driveId}/identify`, { method: "POST" }),
 
   // History
   getHistory: (params?: Record<string, string>) => {
