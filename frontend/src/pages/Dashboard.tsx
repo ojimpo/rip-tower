@@ -87,13 +87,6 @@ export default function Dashboard() {
     },
   });
 
-  const autoRipMutation = useMutation({
-    mutationFn: ({ driveId, body }: { driveId: string; body: Record<string, unknown> }) =>
-      api.updateDrive(driveId, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["drives"] });
-    },
-  });
 
   const handleStartRip = () => {
     if (!ripDialog) return;
@@ -347,33 +340,22 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Auto-rip toggle */}
+                      {/* Eject */}
                       {isOnline && (
                         <button
                           onClick={(e) => {
                             e.preventDefault();
-                            if (drive.auto_rip) {
-                              autoRipMutation.mutate({ driveId: drive.drive_id, body: { auto_rip: false } });
-                            } else {
-                              autoRipMutation.mutate({
-                                driveId: drive.drive_id,
-                                body: { auto_rip: true, auto_rip_source_type: "unknown" },
-                              });
-                            }
+                            api.ejectDrive(drive.drive_id);
                           }}
-                          className={`w-8 h-8 flex items-center justify-center rounded-lg transition text-sm ${
-                            drive.auto_rip
-                              ? "bg-[#e94560]/20 text-[#e94560] hover:bg-[#e94560]/30"
-                              : "hover:bg-white/10 text-gray-500 hover:text-gray-300"
-                          }`}
-                          title={drive.auto_rip ? "Auto-rip ON" : "Auto-rip OFF"}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
+                          title="Eject"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />
                           </svg>
                         </button>
                       )}
-                      {/* Rip / Ripping button */}
+                      {/* Rip / Ripping button — rightmost */}
                       {isOnline && hasActiveJob ? (
                         <Link
                           to={`/job/${drive.active_job_id}`}
@@ -392,21 +374,6 @@ export default function Dashboard() {
                           Rip
                         </button>
                       ) : null}
-                      {/* Eject */}
-                      {isOnline && (
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            api.ejectDrive(drive.drive_id);
-                          }}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
-                          title="Eject"
-                        >
-                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />
-                          </svg>
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
