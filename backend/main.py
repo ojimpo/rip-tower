@@ -1,8 +1,16 @@
 """FastAPI application entry point."""
 
 import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Configure root logger so all backend logs are visible
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    stream=sys.stdout,
+)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,18 +74,6 @@ if STATIC_DIR.exists():
     # Serve static assets (JS, CSS, icons, etc.)
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
     app.mount("/icons", StaticFiles(directory=STATIC_DIR / "icons"), name="icons")
-
-    # Serve SW and manifest at root level
-    @app.get("/sw.js", include_in_schema=False)
-    @app.get("/workbox-{rest:path}", include_in_schema=False)
-    @app.get("/registerSW.js", include_in_schema=False)
-    @app.get("/manifest.webmanifest", include_in_schema=False)
-    async def static_file(rest: str = ""):
-        import os
-        filename = "workbox-" + rest if rest else ""
-        # Determine which file was requested from the path
-        from starlette.requests import Request
-        return FileResponse(STATIC_DIR / filename)
 
     # SPA fallback — serve index.html for all non-API, non-asset routes
     @app.get("/{full_path:path}", include_in_schema=False)

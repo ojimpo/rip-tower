@@ -22,7 +22,7 @@ from backend.metadata.normalize import (
     fullwidth_to_halfwidth,
     normalize_various_artists,
 )
-from backend.models import JobMetadata, MetadataCandidate
+from backend.models import JobMetadata, MetadataCandidate, Track
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +205,20 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
                 issues=json.dumps(issues, ensure_ascii=False) if issues else None,
             )
             session.add(meta)
+
+        # Update track titles and artists from the selected candidate
+        if track_titles:
+            tracks = await session.execute(
+                select(Track)
+                .where(Track.job_id == job_id)
+                .order_by(Track.track_num)
+            )
+            for track in tracks.scalars():
+                idx = track.track_num - 1
+                if idx < len(track_titles):
+                    track.title = track_titles[idx]
+                if is_compilation and idx < len(track_artists):
+                    track.artist = track_artists[idx]
 
         await session.commit()
 

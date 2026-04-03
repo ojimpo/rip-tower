@@ -192,7 +192,7 @@ async def list_jobs(
     return {"jobs": summaries}
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+@router.get("/jobs/{job_id}")
 async def get_job(
     job_id: str,
     session: AsyncSession = Depends(get_session),
@@ -203,30 +203,107 @@ async def get_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     # Load related data
-    metadata = await session.execute(
+    metadata_result = await session.execute(
         select(JobMetadata).where(JobMetadata.job_id == job_id)
     )
-    tracks = await session.execute(
+    meta = metadata_result.scalar_one_or_none()
+
+    tracks_result = await session.execute(
         select(Track).where(Track.job_id == job_id).order_by(Track.track_num)
     )
-    candidates = await session.execute(
+    tracks = tracks_result.scalars().all()
+
+    candidates_result = await session.execute(
         select(MetadataCandidate).where(MetadataCandidate.job_id == job_id)
     )
-    artworks = await session.execute(
+    artworks_result = await session.execute(
         select(Artwork).where(Artwork.job_id == job_id)
     )
-    kashidashi = await session.execute(
+    kashidashi_result = await session.execute(
         select(KashidashiCandidate).where(KashidashiCandidate.job_id == job_id)
     )
 
-    return JobDetailResponse(
-        job=job,
-        metadata=metadata.scalar_one_or_none(),
-        tracks=tracks.scalars().all(),
-        candidates=candidates.scalars().all(),
-        artworks=artworks.scalars().all(),
-        kashidashi_candidates=kashidashi.scalars().all(),
-    )
+    return {
+        "job": {
+            "id": job.id,
+            "album_group": job.album_group,
+            "drive_id": job.drive_id,
+            "disc_id": job.disc_id,
+            "status": job.status,
+            "source_type": job.source_type,
+            "output_dir": job.output_dir,
+            "error_message": job.error_message,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        },
+        "metadata": {
+            "artist": meta.artist,
+            "album": meta.album,
+            "album_base": meta.album_base,
+            "year": meta.year,
+            "genre": meta.genre,
+            "disc_number": meta.disc_number,
+            "total_discs": meta.total_discs,
+            "is_compilation": meta.is_compilation,
+            "confidence": meta.confidence,
+            "source": meta.source,
+            "needs_review": meta.needs_review,
+            "issues": meta.issues,
+            "approved": meta.approved,
+        } if meta else None,
+        "tracks": [
+            {
+                "track_num": t.track_num,
+                "title": t.title,
+                "artist": t.artist,
+                "rip_status": t.rip_status,
+                "encode_status": t.encode_status,
+                "duration_ms": t.duration_ms,
+                "lyrics_source": t.lyrics_source,
+            }
+            for t in tracks
+        ],
+        "candidates": [
+            {
+                "id": c.id,
+                "source": c.source,
+                "source_url": c.source_url,
+                "artist": c.artist,
+                "album": c.album,
+                "year": c.year,
+                "genre": c.genre,
+                "confidence": c.confidence,
+                "selected": c.selected,
+            }
+            for c in candidates_result.scalars().all()
+        ],
+        "artworks": [
+            {
+                "id": a.id,
+                "source": a.source,
+                "url": a.url,
+                "local_path": a.local_path,
+                "width": a.width,
+                "height": a.height,
+                "file_size": a.file_size,
+                "selected": a.selected,
+            }
+            for a in artworks_result.scalars().all()
+        ],
+        "kashidashi_candidates": [
+            {
+                "id": k.id,
+                "item_id": k.item_id,
+                "title": k.title,
+                "artist": k.artist,
+                "score": k.score,
+                "match_type": k.match_type,
+                "matched": k.matched,
+            }
+            for k in kashidashi_result.scalars().all()
+        ],
+    }
 
 
 @router.delete("/jobs/{job_id}")
