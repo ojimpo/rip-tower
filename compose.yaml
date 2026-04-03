@@ -10,4 +10,5 @@ services:
       - /dev:/dev
     environment:
       - CONFIG_PATH=/app/data/config.yaml
+      - TZ=Asia/Tokyo
     restart: unless-stopped
