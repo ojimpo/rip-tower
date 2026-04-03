@@ -188,21 +188,84 @@ async def reapply_metadata(job_id: str) -> None:
         )
         artwork = artwork_result.scalar_one_or_none()
 
+    # Determine new output directory based on current metadata
+    config = get_config()
+    artist_dir = safe_dirname(meta.artist or "Unknown Artist")
+    album_base = safe_dirname(
+        getattr(meta, "album_base", None) or meta.album or "Unknown Album"
+    )
+    if meta.disc_number is not None and meta.total_discs and meta.total_discs > 1:
+        album_dir = f"{album_base} [DISC{meta.disc_number}]"
+    else:
+        album_dir = album_base
+
+    new_output_dir = Path(config.output.music_dir) / artist_dir / album_dir
+    old_output_dir = Path(job.output_dir)
+
+    # Rename folder if metadata changed the path
+    if new_output_dir != old_output_dir and old_output_dir.exists():
+        new_output_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_output_dir), str(new_output_dir))
+        logger.info("Renamed folder: %s → %s", old_output_dir, new_output_dir)
+
+        # Clean up empty parent directories
+        try:
+            old_output_dir.parent.rmdir()
+        except OSError:
+            pass  # Not empty, that's fine
+
+    target_dir = new_output_dir if new_output_dir.exists() else old_output_dir
+
+    # Re-tag files and rename them based on new metadata
+    ext = Path(tracks[0].encoded_path).suffix if tracks and tracks[0].encoded_path else ".flac"
+
     for track in tracks:
         if not track.encoded_path or not Path(track.encoded_path).exists():
-            continue
+            # File might have moved with the folder
+            old_path = Path(track.encoded_path)
+            new_possible = target_dir / old_path.name
+            if new_possible.exists():
+                path = new_possible
+            else:
+                continue
+        else:
+            path = Path(track.encoded_path)
 
-        path = Path(track.encoded_path)
+        # Re-tag
         if path.suffix == ".flac":
-            # Clear existing tags and rewrite
             from backend.services.encoder import _tag_flac
             await _tag_flac(path, track, meta)
 
-            # Re-embed artwork
             if artwork and artwork.local_path:
                 await _embed_artwork(path, Path(artwork.local_path))
 
-    logger.info("Re-applied metadata for job %s", job_id)
+        # Rename file if needed
+        file_artist = safe_filename(track.artist or meta.artist or "Unknown")
+        file_title = safe_filename(track.title or f"Track {track.track_num}")
+        new_filename = f"{track.track_num:02d} {file_artist} - {file_title}{ext}"
+        new_path = target_dir / new_filename
+
+        if path != new_path and path.exists():
+            shutil.move(str(path), str(new_path))
+            path = new_path
+
+        # Update track encoded_path in DB
+        async with async_session() as session:
+            t = await session.execute(
+                select(Track).where(Track.job_id == job_id, Track.track_num == track.track_num)
+            )
+            t = t.scalar_one()
+            t.encoded_path = str(new_path)
+            await session.commit()
+
+    # Update job output_dir
+    async with async_session() as session:
+        j = await session.get(Job, job_id)
+        if j:
+            j.output_dir = str(target_dir)
+            await session.commit()
+
+    logger.info("Re-applied metadata for job %s → %s", job_id, target_dir)
 
 
 async def _embed_artwork(flac_path: Path, artwork_path: Path) -> None:
