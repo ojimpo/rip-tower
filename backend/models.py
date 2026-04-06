@@ -29,6 +29,11 @@ class Drive(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     auto_rip: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_rip_source_type: Mapped[str] = mapped_column(Text, default="unknown")
+    # Cached disc info from identify (cleared on eject / disc removal)
+    cached_disc_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cached_artist: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cached_album: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cached_track_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
@@ -46,6 +51,7 @@ class Job(Base):
     source_type: Mapped[str] = mapped_column(Text, default="unknown")
     output_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disc_total_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow

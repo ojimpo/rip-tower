@@ -78,6 +78,7 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
         if job:
             job.disc_id = disc_id
             job.toc_hash = toc_hash
+            job.disc_total_seconds = total_seconds
 
         for i in range(1, track_count + 1):
             track = Track(

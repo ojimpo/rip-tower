@@ -124,6 +124,9 @@ export interface JobSummary {
   current_track: number | null;
   current_track_percent: number | null;
   tracks_done: number | null;
+  track_titles: (string | null)[] | null;
+  disc_total_seconds: number | null;
+  elapsed_seconds: number | null;
   created_at: string;
   updated_at: string;
   error_message: string | null;

@@ -95,6 +95,10 @@ async def start_monitoring() -> None:
         result = await session.execute(select(Drive))
         for drive in result.scalars():
             drive.current_path = None
+            drive.cached_disc_id = None
+            drive.cached_artist = None
+            drive.cached_album = None
+            drive.cached_track_count = None
         await session.commit()
 
         # Scan and register/update
@@ -183,6 +187,10 @@ async def _rescan_drives() -> None:
         result = await session.execute(select(Drive))
         for drive in result.scalars():
             drive.current_path = None
+            drive.cached_disc_id = None
+            drive.cached_artist = None
+            drive.cached_album = None
+            drive.cached_track_count = None
         await session.commit()
 
         # Scan and update

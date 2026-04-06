@@ -38,6 +38,18 @@ function elapsedText(dateStr: string): string {
   return `${days}d ago`;
 }
 
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function speedText(job: JobSummary): string | null {
+  if (!job.elapsed_seconds || !job.disc_total_seconds) return null;
+  const ratio = job.disc_total_seconds / job.elapsed_seconds;
+  return `${formatDuration(job.disc_total_seconds)} / ${formatDuration(job.elapsed_seconds)} (${ratio.toFixed(1)}x)`;
+}
+
 function progressPercent(job: JobSummary): number {
   if (job.track_count && job.tracks_done != null) {
     const trackProgress = job.current_track_percent ? job.current_track_percent / 100 : 0;
@@ -73,6 +85,7 @@ export default function Dashboard() {
   const [ripDiscNumber, setRipDiscNumber] = useState<string>("");
   const [ripTotalDiscs, setRipTotalDiscs] = useState<string>("");
   const [ripError, setRipError] = useState<string | null>(null);
+  const [identifyingDrives, setIdentifyingDrives] = useState<Set<string>>(new Set());
 
   const ripMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.startRip(body) as Promise<{ job_id: string }>,
@@ -265,7 +278,7 @@ export default function Dashboard() {
                       const isCurrent = job.current_track === num;
                       return {
                         track_num: num,
-                        title: null,
+                        title: job.track_titles?.[i] ?? null,
                         rip_status: isDone ? "ok" : isCurrent ? "ripping" : "pending",
                         encode_status: "pending",
                         rip_progress: isCurrent ? (job.current_track_percent ?? null) : null,
@@ -327,10 +340,12 @@ export default function Dashboard() {
                             </span>
                           )}
                         </div>
-                        {drive.disc_info && drive.disc_info.artist ? (
+                        {drive.disc_info ? (
                           <p className="text-xs text-gray-400 truncate mt-0.5">
-                            {drive.disc_info.artist} / {drive.disc_info.album}
-                            {drive.disc_info.track_count && ` · ${drive.disc_info.track_count} tracks`}
+                            {drive.disc_info.artist
+                              ? `${drive.disc_info.artist} / ${drive.disc_info.album}`
+                              : "不明なCD"}
+                            {drive.disc_info.track_count ? ` · ${drive.disc_info.track_count} tracks` : ""}
                           </p>
                         ) : (
                           <p className="text-xs text-gray-500 mt-0.5">
@@ -341,18 +356,25 @@ export default function Dashboard() {
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {/* Identify disc */}
-                      {isOnline && drive.has_disc && !drive.disc_info && !hasActiveJob && (
+                      {isOnline && drive.has_disc && !hasActiveJob && (
                         <button
                           onClick={(e) => {
                             e.preventDefault();
-                            api.identifyDisc(drive.drive_id).then(() => {
-                              queryClient.invalidateQueries({ queryKey: ["drives"] });
-                            });
+                            if (identifyingDrives.has(drive.drive_id)) return;
+                            setIdentifyingDrives((prev) => new Set(prev).add(drive.drive_id));
+                            api.identifyDisc(drive.drive_id)
+                              .then(() => queryClient.invalidateQueries({ queryKey: ["drives"] }))
+                              .finally(() => setIdentifyingDrives((prev) => {
+                                const next = new Set(prev);
+                                next.delete(drive.drive_id);
+                                return next;
+                              }));
                           }}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
+                          disabled={identifyingDrives.has(drive.drive_id)}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition disabled:opacity-50"
                           title="CD情報を取得"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className={`w-4 h-4${identifyingDrives.has(drive.drive_id) ? " animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                           </svg>
                         </button>
@@ -524,7 +546,9 @@ export default function Dashboard() {
                       : `Job ${job.job_id.slice(0, 8)}`}
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    {job.track_count && `${job.track_count} tracks · `}FLAC · {elapsedText(job.updated_at)}
+                    {job.track_count && `${job.track_count} tracks · `}FLAC
+                    {speedText(job) && ` · ${speedText(job)}`}
+                    {` · ${elapsedText(job.updated_at)}`}
                   </p>
                 </div>
                 <svg className="w-4 h-4 text-emerald-400 shrink-0" fill="currentColor" viewBox="0 0 20 20">

@@ -1,5 +1,6 @@
 """Ripping history and statistics endpoints."""
 
+from datetime import timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -68,7 +69,7 @@ async def get_history(
             "artist": meta.artist if meta else None,
             "album": meta.album if meta else None,
             "source_type": job.source_type,
-            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "completed_at": job.completed_at.replace(tzinfo=timezone.utc).isoformat() if job.completed_at else None,
             "track_count": track_count or None,
             "artwork_url": None,
             "kashidashi_id": str(kashi.item_id) if kashi else None,

@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session
+
+
+def _utc_iso(dt: datetime | None) -> str | None:
+    """Format a naive-UTC datetime with timezone suffix for JS."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 from backend.models import Drive, Job, JobMetadata, Track, MetadataCandidate, Artwork, KashidashiCandidate
 from backend.schemas import (
     JobResponse,
@@ -183,6 +193,11 @@ async def list_jobs(
             if drive:
                 drive_name = drive.name
 
+        # Elapsed time for completed jobs
+        elapsed_seconds = None
+        if job.completed_at and job.created_at:
+            elapsed_seconds = int((job.completed_at - job.created_at).total_seconds())
+
         summaries.append({
             "job_id": job.id,
             "status": job.status,
@@ -193,8 +208,11 @@ async def list_jobs(
             "current_track": current_track,
             "current_track_percent": current_track_percent,
             "tracks_done": tracks_done,
-            "created_at": job.created_at.isoformat() if job.created_at else None,
-            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "track_titles": [t.title for t in tracks] if tracks else None,
+            "disc_total_seconds": job.disc_total_seconds,
+            "elapsed_seconds": elapsed_seconds,
+            "created_at": _utc_iso(job.created_at),
+            "updated_at": _utc_iso(job.updated_at),
             "error_message": job.error_message,
             "artwork_url": None,  # TODO: add artwork thumbnail
         })
@@ -243,9 +261,9 @@ async def get_job(
             "source_type": job.source_type,
             "output_dir": job.output_dir,
             "error_message": job.error_message,
-            "created_at": job.created_at.isoformat() if job.created_at else None,
-            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "created_at": _utc_iso(job.created_at),
+            "updated_at": _utc_iso(job.updated_at),
+            "completed_at": _utc_iso(job.completed_at),
         },
         "metadata": {
             "artist": meta.artist,
@@ -499,7 +517,7 @@ async def upload_wav_replacement(
     return {"status": "replaced", "track_num": track_num}
 
 
-@router.put("/jobs/{job_id}/candidates/{candidate_id}/select")
+@router.post("/jobs/{job_id}/candidates/{candidate_id}/select")
 async def select_candidate(
     job_id: str,
     candidate_id: int,
@@ -532,6 +550,24 @@ async def select_candidate(
         meta.confidence = candidate.confidence
         meta.source = candidate.source
         meta.source_url = candidate.source_url
+
+    # Update track titles from candidate if available
+    if candidate.track_titles:
+        import json
+        try:
+            titles = json.loads(candidate.track_titles)
+            if titles:
+                tracks = await session.execute(
+                    select(Track)
+                    .where(Track.job_id == job_id)
+                    .order_by(Track.track_num)
+                )
+                for track in tracks.scalars():
+                    idx = track.track_num - 1
+                    if idx < len(titles):
+                        track.title = titles[idx]
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     await session.commit()
     return {"status": "selected"}

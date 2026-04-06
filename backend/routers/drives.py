@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -70,6 +71,14 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                     "track_count": track_count,
                 }
 
+        # Fall back to cached disc info from identify
+        if not disc_info and drive.cached_disc_id:
+            disc_info = {
+                "artist": drive.cached_artist,
+                "album": drive.cached_album,
+                "track_count": drive.cached_track_count,
+            }
+
         # Check if there's an active (non-complete/error) job on this drive
         active_job_result = await session.execute(
             select(Job)
@@ -84,7 +93,7 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
             "drive_id": drive.drive_id,
             "name": drive.name,
             "current_path": drive.current_path,
-            "last_seen_at": drive.last_seen_at.isoformat() if drive.last_seen_at else None,
+            "last_seen_at": drive.last_seen_at.replace(tzinfo=timezone.utc).isoformat() if drive.last_seen_at else None,
             "has_disc": has_disc,
             "disc_info": disc_info,
             "auto_rip": drive.auto_rip,
@@ -168,32 +177,47 @@ async def identify_disc(
     if proc.returncode != 0:
         raise HTTPException(status_code=500, detail=f"cd-discid failed: {stderr.decode().strip()}")
 
-    parts = stdout.decode().strip().split()
+    raw = stdout.decode().strip()
+    parts = raw.split()
     disc_id = parts[0].lower() if parts else "unknown"
     track_count = int(parts[1]) if len(parts) > 1 else 0
+    offsets = [int(x) for x in parts[2:2 + track_count]] if len(parts) > 2 else []
+    leadout_seconds = int(parts[2 + track_count]) if len(parts) > 2 + track_count else 0
 
-    # Quick MusicBrainz lookup
+    # Quick MusicBrainz lookup via TOC
+    # cd-discid gives offsets in sectors, leadout in seconds → convert to sectors
     import httpx
     artist = None
     album = None
-    try:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": "RipTower/0.1.0"},
-            timeout=10,
-        ) as client:
-            resp = await client.get(
-                f"https://musicbrainz.org/ws/2/discid/{disc_id}",
-                params={"fmt": "json", "inc": "artist-credits"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                releases = data.get("releases", [])
-                if releases:
-                    rel = releases[0]
-                    artist = rel.get("artist-credit", [{}])[0].get("name", "") if rel.get("artist-credit") else None
-                    album = rel.get("title")
-    except Exception:
-        pass
+    if offsets and leadout_seconds:
+        leadout_sectors = leadout_seconds * 75
+        toc = f"1 {track_count} {leadout_sectors} {' '.join(str(o) for o in offsets)}"
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": "RipTower/0.1.0"},
+                timeout=10,
+            ) as client:
+                resp = await client.get(
+                    "https://musicbrainz.org/ws/2/discid/-",
+                    params={"toc": toc, "fmt": "json", "inc": "artist-credits"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    releases = data.get("releases", [])
+                    if releases:
+                        rel = releases[0]
+                        ac = rel.get("artist-credit", [])
+                        artist = ac[0].get("name", "") if ac and isinstance(ac[0], dict) else None
+                        album = rel.get("title")
+        except Exception:
+            pass
+
+    # Save to drive cache
+    drive.cached_disc_id = disc_id
+    drive.cached_artist = artist
+    drive.cached_album = album
+    drive.cached_track_count = track_count
+    await session.commit()
 
     return {
         "disc_id": disc_id,
