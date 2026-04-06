@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useWebSocket } from "../hooks/useWebSocket";
 import TrackProgress from "../components/TrackProgress";
-import type { Drive, JobSummary } from "../lib/types";
+import type { Drive, JobSummary, WsEvent } from "../lib/types";
 
 const SOURCE_TYPES = [
   { value: "library", label: "\u56F3\u66F8\u9928" },
@@ -74,7 +74,32 @@ export default function Dashboard() {
     refetchInterval: 10000,
   });
 
-  useWebSocket();
+  // Eject prompt: show banner when a job completes/enters review
+  const [ejectPromptDrives, setEjectPromptDrives] = useState<Set<string>>(new Set());
+
+  const handleWsEvent = useCallback((event: WsEvent) => {
+    if (event.type === "job:complete" || event.type === "job:review") {
+      // Find which drive this job was on
+      const jobs = jobsData?.jobs;
+      const job = jobs?.find((j) => j.job_id === event.job_id);
+      if (job?.drive_name) {
+        // Use drive_name to find drive_id from drives list
+        const drive = drives?.find((d) => d.name === job.drive_name);
+        if (drive && drive.has_disc) {
+          setEjectPromptDrives((prev) => new Set(prev).add(drive.drive_id));
+        }
+      }
+    }
+    if (event.type === "drive:disc_ejected") {
+      setEjectPromptDrives((prev) => {
+        const next = new Set(prev);
+        next.delete(event.drive_id);
+        return next;
+      });
+    }
+  }, [jobsData, drives]);
+
+  useWebSocket(handleWsEvent);
 
   // Rip start dialog state
   const [ripDialog, setRipDialog] = useState<{ driveId: string; driveName: string } | null>(null);
@@ -126,6 +151,50 @@ export default function Dashboard() {
     setRipDiscNumber("");
     setRipTotalDiscs("");
     setRipError(null);
+  };
+
+  // Rip All dialog
+  const [ripAllDialog, setRipAllDialog] = useState(false);
+  const [ripAllSourceType, setRipAllSourceType] = useState("unknown");
+  const [ripAllPending, setRipAllPending] = useState(false);
+
+  const rippableDrives = (drives ?? []).filter(
+    (d) => d.current_path && d.has_disc && !d.active_job_id
+  );
+
+  const handleRipAll = async () => {
+    setRipAllPending(true);
+    try {
+      for (const drive of rippableDrives) {
+        await api.startRip({ drive_id: drive.drive_id, source_type: ripAllSourceType });
+      }
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
+    } finally {
+      setRipAllPending(false);
+      setRipAllDialog(false);
+    }
+  };
+
+  const handleEjectAll = () => {
+    const onlineDrives = (drives ?? []).filter((d) => d.current_path);
+    for (const drive of onlineDrives) {
+      api.ejectDrive(drive.drive_id);
+    }
+  };
+
+  const handleIdentifyAll = () => {
+    for (const drive of rippableDrives) {
+      if (identifyingDrives.has(drive.drive_id)) continue;
+      setIdentifyingDrives((prev) => new Set(prev).add(drive.drive_id));
+      api.identifyDisc(drive.drive_id)
+        .then(() => queryClient.invalidateQueries({ queryKey: ["drives"] }))
+        .finally(() => setIdentifyingDrives((prev) => {
+          const next = new Set(prev);
+          next.delete(drive.drive_id);
+          return next;
+        }));
+    }
   };
 
   const jobs = jobsData?.jobs ?? [];
@@ -215,6 +284,39 @@ export default function Dashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
                 </svg>
               </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Eject Prompt */}
+      {drives && drives.filter((d) => ejectPromptDrives.has(d.drive_id) && d.has_disc).length > 0 && (
+        <section className="mx-3 mt-3">
+          <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-cyan-950/30">
+            {drives.filter((d) => ejectPromptDrives.has(d.drive_id) && d.has_disc).map((drive) => (
+              <div key={drive.drive_id} className="flex items-center justify-between px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-cyan-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />
+                  </svg>
+                  <span className="text-sm text-cyan-200">
+                    {drive.name}のCDを取り出してください
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    api.ejectDrive(drive.drive_id);
+                    setEjectPromptDrives((prev) => {
+                      const next = new Set(prev);
+                      next.delete(drive.drive_id);
+                      return next;
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 text-xs font-medium hover:bg-cyan-500/30 transition"
+                >
+                  Eject
+                </button>
+              </div>
             ))}
           </div>
         </section>
@@ -310,7 +412,31 @@ export default function Dashboard() {
       {/* Drives */}
       {drives && drives.length > 0 && (
         <section className="mx-3 mt-4">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 px-1">Drives</h2>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Drives</h2>
+            {rippableDrives.length > 0 && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleIdentifyAll}
+                  className="text-[10px] px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition"
+                >
+                  Identify All
+                </button>
+                <button
+                  onClick={handleEjectAll}
+                  className="text-[10px] px-2 py-1 rounded-md bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition"
+                >
+                  Eject All
+                </button>
+                <button
+                  onClick={() => { setRipAllSourceType("unknown"); setRipAllDialog(true); }}
+                  className="text-[10px] px-2 py-1 rounded-md bg-[#e94560]/20 text-[#e94560] hover:bg-[#e94560]/30 transition font-medium"
+                >
+                  Rip All
+                </button>
+              </div>
+            )}
+          </div>
           <div className="rounded-xl bg-[#16213e] border border-white/5 divide-y divide-white/5">
             {drives.map((drive) => {
               const isOnline = !!drive.current_path;
@@ -514,6 +640,66 @@ export default function Dashboard() {
               className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
             >
               {ripMutation.isPending ? "Starting..." : "\u30EA\u30C3\u30D4\u30F3\u30B0\u958B\u59CB"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Rip All Dialog */}
+      {ripAllDialog && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setRipAllDialog(false)}>
+          <div
+            className="w-full max-w-md bg-[#16213e] rounded-t-2xl sm:rounded-2xl border border-white/10 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold">Rip All ({rippableDrives.length}台)</h3>
+              <button onClick={() => setRipAllDialog(false)} className="text-gray-500 hover:text-white transition">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="text-xs text-gray-400 space-y-1">
+              {rippableDrives.map((d) => (
+                <div key={d.drive_id} className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                  <span>{d.name}</span>
+                  {d.disc_info && (
+                    <span className="text-gray-500">
+                      — {d.disc_info.artist ? `${d.disc_info.artist} / ${d.disc_info.album}` : `${d.disc_info.track_count} tracks`}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <label className="text-xs text-gray-400 mb-1.5 block">ソース種別</label>
+              <div className="flex gap-2">
+                {SOURCE_TYPES.map((st) => (
+                  <button
+                    key={st.value}
+                    onClick={() => setRipAllSourceType(st.value)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${
+                      ripAllSourceType === st.value
+                        ? "bg-[#e94560] text-white"
+                        : "bg-white/5 text-gray-400 hover:bg-white/10"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={handleRipAll}
+              disabled={ripAllPending}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
+            >
+              {ripAllPending ? "Starting..." : `${rippableDrives.length}台まとめてリッピング開始`}
             </button>
           </div>
         </div>

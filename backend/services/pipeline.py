@@ -164,6 +164,18 @@ async def _check_approval(job_id: str) -> None:
             from backend.services.notifier import schedule_reminder
             asyncio.create_task(schedule_reminder(job_id))
 
+            # Schedule eject reminder
+            await _schedule_eject_reminder(job_id)
+
+
+async def _schedule_eject_reminder(job_id: str) -> None:
+    """Schedule an eject reminder if the job has a drive."""
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        if job and job.drive_id:
+            from backend.services.notifier import schedule_eject_reminder
+            asyncio.create_task(schedule_eject_reminder(job_id, job.drive_id))
+
 
 async def run_finalize(job_id: str) -> None:
     """Run the finalization step."""
@@ -177,6 +189,9 @@ async def run_finalize(job_id: str) -> None:
 
         from backend.services.notifier import notify_complete
         await notify_complete(job_id)
+
+        # Schedule eject reminder
+        await _schedule_eject_reminder(job_id)
 
     except Exception as e:
         logger.exception("Finalization failed for job %s", job_id)

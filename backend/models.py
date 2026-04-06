@@ -52,6 +52,7 @@ class Job(Base):
     output_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     disc_total_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discord_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow

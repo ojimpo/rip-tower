@@ -43,6 +43,7 @@ class GeneralConfig(BaseModel):
     auto_approve_threshold: int = 85
     reminder_initial_hours: int = 6
     reminder_interval_hours: int = 24
+    eject_reminder_minutes: int = 10
     base_url: str = ""
 
 
