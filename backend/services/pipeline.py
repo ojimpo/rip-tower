@@ -205,8 +205,12 @@ async def run_resolve_only(job_id: str, hints: dict) -> None:
     """
     try:
         from backend.metadata.resolver import resolve
+        from backend.services.disc_identity import restore_identity
 
-        await resolve(job_id, None, hints, None)
+        # Restore disc identity from DB so re-resolve can use disc ID lookups
+        identity = await restore_identity(job_id)
+
+        await resolve(job_id, identity, hints, None)
 
         # Encode tracks (WAV imports skip the rip+encode pipeline path)
         await _update_status(job_id, "encoding")

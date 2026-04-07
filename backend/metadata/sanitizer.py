@@ -134,6 +134,10 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     if artist and _is_katakana_only(artist):
         issues.append("artist_variant")
 
+    # Parenthesized romanization/translation detection (e.g. "葉加瀬太郎 (Taro Hakase)")
+    if _has_parenthesized_variant(artist) or _has_parenthesized_variant(album):
+        issues.append("parenthesized_variant")
+
     # Contradiction detection — different candidates disagree on artist/album
     if len(candidates) >= 2:
         artists_seen = {c.artist for c in candidates[:3] if c.artist and c.confidence and c.confidence >= 50}
@@ -290,3 +294,43 @@ def _is_katakana_only(text: str) -> bool:
         return False
     katakana_count = sum(1 for c in stripped if "\u30a0" <= c <= "\u30ff")
     return katakana_count / len(stripped) > 0.8
+
+
+def _has_parenthesized_variant(text: str) -> bool:
+    """Detect parenthesized romanization/translation appended to a name.
+
+    Catches patterns like:
+    - "葉加瀬太郎 (Taro Hakase)" — Japanese name + romanized
+    - "Ryuichi Sakamoto (坂本龍一)" — Romanized + Japanese
+    - "交響曲第9番 (Symphony No. 9)" — Japanese title + English translation
+
+    Heuristic: text has a parenthesized suffix, and either the base or the
+    parenthesized part uses a different primary script (CJK vs Latin).
+    """
+    if not text:
+        return False
+    m = re.match(r"^(.+?)\s*[(\uff08](.+?)[)\uff09]\s*$", text)
+    if not m:
+        return False
+    base = m.group(1).strip()
+    paren = m.group(2).strip()
+    if not base or not paren:
+        return False
+    base_cjk = _cjk_ratio(base)
+    paren_cjk = _cjk_ratio(paren)
+    # One part is primarily CJK, the other primarily Latin → redundant variant
+    return (base_cjk > 0.5) != (paren_cjk > 0.5)
+
+
+def _cjk_ratio(text: str) -> float:
+    """Return the ratio of CJK + kana characters in text."""
+    stripped = re.sub(r"\s+", "", text)
+    if not stripped:
+        return 0.0
+    cjk = sum(
+        1 for c in stripped
+        if "\u3000" <= c <= "\u9fff"  # CJK, hiragana, katakana
+        or "\uf900" <= c <= "\ufaff"  # CJK compat
+        or "\U00020000" <= c <= "\U0002fa1f"  # CJK ext
+    )
+    return cjk / len(stripped)

@@ -149,3 +149,32 @@ async def read_disc_identity_only(drive_id: str) -> DiscIdentity:
     )
     logger.info("Disc identity read: %s (%d tracks)", disc_id, track_count)
     return identity
+
+
+async def restore_identity(job_id: str) -> DiscIdentity | None:
+    """Reconstruct a DiscIdentity from stored Job data.
+
+    Returns a partial identity (no offsets/leadout) that is still sufficient
+    for MusicBrainz disc ID lookup, Kashidashi matching, and source filtering.
+    Returns None if the job has no stored disc_id.
+    """
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        if not job or not job.disc_id:
+            return None
+
+        result = await session.execute(
+            select(Track).where(Track.job_id == job_id)
+        )
+        track_count = len(result.scalars().all())
+
+    identity = DiscIdentity(
+        disc_id=job.disc_id,
+        track_count=track_count,
+        offsets=[],  # Not stored; CDDB won't work but MusicBrainz will
+        leadout=0,
+        toc_hash=job.toc_hash or "",
+        total_seconds=job.disc_total_seconds or 0,
+    )
+    logger.info("Restored identity from DB: %s (%d tracks)", job.disc_id, track_count)
+    return identity

@@ -28,6 +28,7 @@ LLM_TRIGGER_ISSUES = {
     "no_track_titles",
     "artist_contradiction",
     "album_contradiction",
+    "parenthesized_variant",
 }
 
 # Model mapping for config shorthand
@@ -38,26 +39,29 @@ MODEL_MAP = {
 }
 
 
-async def maybe_assist(job_id: str) -> None:
+async def maybe_assist(job_id: str) -> bool:
     """Check if LLM assistance is needed and call if so.
+
+    Returns True if an LLM candidate was added.
 
     Conditions checked:
     - Mojibake detected in artist/album/track titles
     - Artist/album contradictions between candidates
     - Missing track titles
     - Katakana-only artist name (might be English artist written in kana)
+    - Parenthesized romanization/translation in artist or album name
     """
     config = get_config()
     api_key = config.integrations.llm_api_key
     if not api_key:
         logger.debug("LLM API key not configured, skipping LLM assist")
-        return
+        return False
 
     # Load current metadata and check for trigger issues
     async with async_session() as session:
         meta = await session.get(JobMetadata, job_id)
         if not meta:
-            return
+            return False
 
         issues = json.loads(meta.issues) if meta.issues else []
 
@@ -65,7 +69,7 @@ async def maybe_assist(job_id: str) -> None:
     trigger_issues = set(issues) & LLM_TRIGGER_ISSUES
     if not trigger_issues:
         logger.debug("No LLM-trigger issues for job %s", job_id)
-        return
+        return False
 
     logger.info(
         "LLM assist triggered for job %s: issues=%s", job_id, trigger_issues
@@ -81,7 +85,7 @@ async def maybe_assist(job_id: str) -> None:
         candidates = list(result.scalars().all())
 
     if not candidates:
-        return
+        return False
 
     # Build prompt
     prompt = _build_prompt(meta, candidates, trigger_issues)
@@ -94,10 +98,10 @@ async def maybe_assist(job_id: str) -> None:
         response = await _call_claude(api_key, model_id, prompt)
     except Exception:
         logger.exception("LLM API call failed for job %s", job_id)
-        return
+        return False
 
     if not response:
-        return
+        return False
 
     # Save as new candidate
     async with async_session() as session:
@@ -128,6 +132,7 @@ async def maybe_assist(job_id: str) -> None:
         response.get("album"),
         response.get("confidence", 0),
     )
+    return True
 
 
 def _build_prompt(
@@ -171,6 +176,7 @@ Based on all the evidence, provide corrected metadata. Common fixes needed:
 - "artist_variant": The artist name is in katakana but might be a well-known English artist. Provide the canonical name.
 - "no_track_titles": Try to determine correct track titles from the available data.
 - "artist_contradiction" / "album_contradiction": Multiple sources disagree. Determine the correct value.
+- "parenthesized_variant": The artist or album name has a redundant romanization/translation in parentheses (e.g. "葉加瀬太郎 (Taro Hakase)"). Remove the parenthesized part and use the canonical name. For Japanese artists, use the Japanese name. For Western artists, use the Western name.
 
 Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
 {{

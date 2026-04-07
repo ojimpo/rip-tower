@@ -364,7 +364,7 @@ async def update_metadata(
     request: MetadataUpdateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Manually edit job metadata."""
+    """Manually edit job metadata. Syncs shared fields to album group."""
     meta = await session.execute(
         select(JobMetadata).where(JobMetadata.job_id == job_id)
     )
@@ -372,11 +372,20 @@ async def update_metadata(
     if not meta:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    for field, value in request.model_dump(exclude_unset=True).items():
+    updates = request.model_dump(exclude_unset=True)
+    for field, value in updates.items():
         setattr(meta, field, value)
 
+    # Sync shared fields to other discs in the same album group
+    job = await session.get(Job, job_id)
+    synced_count = 0
+    if job and job.album_group:
+        synced_count = await _sync_group_metadata(
+            session, job.album_group, job_id, updates
+        )
+
     await session.commit()
-    return {"status": "updated"}
+    return {"status": "updated", "group_synced": synced_count}
 
 
 @router.post("/jobs/{job_id}/metadata/approve")
@@ -809,6 +818,122 @@ async def get_group(
         })
 
     return {"album_group": group_id, "jobs": group_jobs}
+
+
+# Fields shared across all discs in an album group
+_GROUP_SHARED_FIELDS = {"artist", "album_base", "year", "genre", "total_discs", "is_compilation"}
+
+
+async def _sync_group_metadata(
+    session: AsyncSession,
+    group_id: str,
+    source_job_id: str,
+    updates: dict,
+) -> int:
+    """Sync shared metadata fields from one job to all other jobs in the group.
+
+    Only syncs fields in _GROUP_SHARED_FIELDS. Per-disc fields like
+    disc_number and album (with disc suffix) are NOT synced.
+    Returns the number of other jobs synced.
+    """
+    shared_updates = {k: v for k, v in updates.items() if k in _GROUP_SHARED_FIELDS}
+    if not shared_updates:
+        return 0
+
+    result = await session.execute(
+        select(Job).where(Job.album_group == group_id, Job.id != source_job_id)
+    )
+    other_jobs = result.scalars().all()
+
+    synced = 0
+    for job in other_jobs:
+        meta_result = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job.id)
+        )
+        meta = meta_result.scalar_one_or_none()
+        if not meta:
+            continue
+        for field, value in shared_updates.items():
+            setattr(meta, field, value)
+        synced += 1
+
+    return synced
+
+
+@router.post("/groups/{group_id}/sync")
+async def sync_group_metadata(
+    group_id: str,
+    source_job_id: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """Sync shared metadata from one disc to all others in the group.
+
+    If source_job_id is not provided, uses the disc with the highest confidence.
+    Syncs: artist, album_base, year, genre, total_discs, is_compilation.
+    """
+    result = await session.execute(
+        select(Job).where(Job.album_group == group_id).order_by(Job.created_at)
+    )
+    jobs = result.scalars().all()
+    if not jobs:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # Pick source disc
+    source_meta = None
+    if source_job_id:
+        meta_result = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == source_job_id)
+        )
+        source_meta = meta_result.scalar_one_or_none()
+    else:
+        # Use highest confidence
+        best_conf = -1
+        for job in jobs:
+            meta_result = await session.execute(
+                select(JobMetadata).where(JobMetadata.job_id == job.id)
+            )
+            meta = meta_result.scalar_one_or_none()
+            if meta and (meta.confidence or 0) > best_conf:
+                best_conf = meta.confidence or 0
+                source_meta = meta
+                source_job_id = job.id
+
+    if not source_meta:
+        raise HTTPException(status_code=404, detail="No metadata found in group")
+
+    # Build updates from source
+    shared_updates = {
+        field: getattr(source_meta, field)
+        for field in _GROUP_SHARED_FIELDS
+        if getattr(source_meta, field, None) is not None
+    }
+
+    synced = 0
+    for job in jobs:
+        if job.id == source_job_id:
+            continue
+        meta_result = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job.id)
+        )
+        meta = meta_result.scalar_one_or_none()
+        if not meta:
+            continue
+        for field, value in shared_updates.items():
+            setattr(meta, field, value)
+        synced += 1
+
+    await session.commit()
+
+    logger.info(
+        "Synced group %s from job %s: %d discs updated, fields=%s",
+        group_id, source_job_id, synced, list(shared_updates.keys()),
+    )
+    return {
+        "status": "synced",
+        "source_job_id": source_job_id,
+        "synced_count": synced,
+        "fields": list(shared_updates.keys()),
+    }
 
 
 @router.post("/jobs/{job_id}/re-rip/failed")
