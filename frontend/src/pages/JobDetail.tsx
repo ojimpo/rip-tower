@@ -5,7 +5,7 @@ import { useJob } from "../hooks/useJob";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { api } from "../lib/api";
 import EditableField from "../components/EditableField";
-import type { Track, GroupResponse, JobSummary } from "../lib/types";
+import type { Track, GroupResponse, JobSummary, ConflictsResponse } from "../lib/types";
 
 type Tab = "metadata" | "artwork" | "lyrics" | "kashidashi";
 
@@ -38,6 +38,22 @@ export default function JobDetail() {
     onSuccess: () => {
       invalidateJob();
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+
+  // Check for existing file conflicts when in review with existing_files issue
+  const hasExistingFilesIssue = data?.metadata?.issues?.includes("existing_files") ?? false;
+  const conflictsQuery = useQuery<ConflictsResponse>({
+    queryKey: ["conflicts", jobId],
+    queryFn: () => api.getConflicts(jobId) as Promise<ConflictsResponse>,
+    enabled: hasExistingFilesIssue,
+  });
+
+  const trashConflictsMutation = useMutation({
+    mutationFn: () => api.trashConflicts(jobId),
+    onSuccess: () => {
+      invalidateJob();
+      queryClient.invalidateQueries({ queryKey: ["conflicts", jobId] });
     },
   });
 
@@ -102,6 +118,14 @@ export default function JobDetail() {
   const skipKashidashiMutation = useMutation({
     mutationFn: () => api.skipKashidashi(jobId),
     onSuccess: invalidateJob,
+  });
+
+  const reMatchKashidashiMutation = useMutation({
+    mutationFn: () => api.reMatchKashidashi(jobId),
+    onSuccess: () => {
+      invalidateJob();
+      setSelectedKashidashi(null);
+    },
   });
 
   const reRipFailedMutation = useMutation({
@@ -676,15 +700,51 @@ export default function JobDetail() {
             </div>
           )}
 
+          {/* Existing Files Conflict Warning */}
+          {hasExistingFilesIssue && conflictsQuery.data && conflictsQuery.data.files.length > 0 && (
+            <div className="mx-4 mb-4 rounded-xl bg-amber-500/10 border border-amber-500/30 p-4">
+              <h4 className="text-sm font-bold text-amber-400 mb-2">
+                出力先に既存ファイルがあります
+              </h4>
+              <p className="text-xs text-gray-400 mb-2">
+                {conflictsQuery.data.output_dir}
+              </p>
+              <ul className="text-xs text-gray-300 space-y-1 mb-3 max-h-32 overflow-y-auto">
+                {conflictsQuery.data.files.map((f) => (
+                  <li key={f.name} className="flex justify-between">
+                    <span className="truncate">{f.name}</span>
+                    <span className="text-gray-500 ml-2 shrink-0">
+                      {(f.size / 1024 / 1024).toFixed(1)} MB
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => trashConflictsMutation.mutate()}
+                disabled={trashConflictsMutation.isPending}
+                className="w-full py-2 rounded-lg bg-amber-500/20 text-amber-400 text-xs font-bold hover:bg-amber-500/30 active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                {trashConflictsMutation.isPending
+                  ? "移動中..."
+                  : `${conflictsQuery.data.files.length} ファイルをゴミ箱に移動`}
+              </button>
+              {trashConflictsMutation.isError && (
+                <p className="text-xs text-red-400 mt-2">
+                  {(trashConflictsMutation.error as Error).message}
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Approve Button */}
           {job.status === "review" && (
             <div className="mx-4 mb-6">
               <button
                 onClick={() => approveMutation.mutate()}
-                disabled={approveMutation.isPending}
+                disabled={approveMutation.isPending || hasExistingFilesIssue}
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
               >
-                {approveMutation.isPending ? "\u627F\u8A8D\u4E2D..." : "\u627F\u8A8D\u3057\u3066\u5B8C\u4E86"}
+                {approveMutation.isPending ? "\u627F\u8A8D\u4E2D..." : hasExistingFilesIssue ? "既存ファイルを除去してください" : "\u627F\u8A8D\u3057\u3066\u5B8C\u4E86"}
               </button>
               {approveMutation.isError && (
                 <p className="text-xs text-red-400 mt-2 text-center">
@@ -952,20 +1012,29 @@ export default function JobDetail() {
 
           <button
             onClick={() => {
-              if (selectedKashidashi === -1) {
+              const effectiveId = selectedKashidashi ?? kashidashi_candidates.find((k) => k.matched)?.id ?? null;
+              if (effectiveId === -1) {
                 skipKashidashiMutation.mutate();
-              } else if (selectedKashidashi != null) {
-                matchKashidashiMutation.mutate(selectedKashidashi);
+              } else if (effectiveId != null) {
+                matchKashidashiMutation.mutate(effectiveId);
               }
             }}
             disabled={
-              selectedKashidashi === null ||
+              (selectedKashidashi === null && !kashidashi_candidates.some((k) => k.matched)) ||
               matchKashidashiMutation.isPending ||
               skipKashidashiMutation.isPending
             }
             className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-sm font-bold text-white shadow-lg hover:shadow-blue-600/30 active:scale-[0.98] transition-all mb-6 disabled:opacity-50"
           >
             {matchKashidashiMutation.isPending || skipKashidashiMutation.isPending ? "\u51E6\u7406\u4E2D..." : "\u78BA\u5B9A"}
+          </button>
+
+          <button
+            onClick={() => reMatchKashidashiMutation.mutate()}
+            disabled={reMatchKashidashiMutation.isPending}
+            className="w-full py-2 rounded-xl bg-[#16213e] border border-white/5 text-xs text-gray-400 hover:text-gray-200 hover:border-white/15 transition mb-6 disabled:opacity-50"
+          >
+            {reMatchKashidashiMutation.isPending ? "\u691C\u7D22\u4E2D..." : "\u73FE\u5728\u306E\u30E1\u30BF\u30C7\u30FC\u30BF\u3067\u518D\u691C\u7D22"}
           </button>
         </div>
       )}

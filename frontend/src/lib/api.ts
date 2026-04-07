@@ -70,9 +70,11 @@ export const api = {
 
   // Kashidashi
   matchKashidashi: (jobId: string, candidateId: number) =>
-    request(`/jobs/${jobId}/kashidashi/${candidateId}/match`, { method: "POST" }),
+    request(`/jobs/${jobId}/kashidashi/${candidateId}/match`, { method: "PUT" }),
   skipKashidashi: (jobId: string) =>
     request(`/jobs/${jobId}/kashidashi/skip`, { method: "POST" }),
+  reMatchKashidashi: (jobId: string) =>
+    request(`/jobs/${jobId}/kashidashi/re-match`, { method: "POST" }),
 
   // Album groups
   createGroup: (jobId: string) =>
@@ -141,6 +143,17 @@ export const api = {
     }
     return res.json();
   },
+
+  // Conflicts
+  getConflicts: (jobId: string) => request(`/jobs/${jobId}/conflicts`),
+  trashConflicts: (jobId: string) =>
+    request(`/jobs/${jobId}/conflicts/trash`, { method: "POST" }),
+
+  // Trash
+  getTrash: () => request("/trash"),
+  emptyTrash: () => request("/trash", { method: "DELETE" }),
+  deleteTrashItem: (label: string) =>
+    request(`/trash/${encodeURIComponent(label)}`, { method: "DELETE" }),
 
   // Settings
   getSettings: () => request("/settings"),

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { api } from "../lib/api";
-import type { Drive } from "../lib/types";
+import type { Drive, TrashResponse } from "../lib/types";
 
 interface AppConfig {
   general: { auto_approve_threshold: number; reminder_initial_hours: number; reminder_interval_hours: number; base_url: string };
@@ -506,6 +506,9 @@ export default function Settings() {
           </div>
         </details>
 
+        {/* ==================== Trash ==================== */}
+        <TrashSection />
+
         {/* Save button */}
         <div className="pt-2 pb-4">
           <button
@@ -524,5 +527,100 @@ export default function Settings() {
         </div>
       </div>
     </div>
+  );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function TrashSection() {
+  const queryClient = useQueryClient();
+
+  const { data: trash } = useQuery<TrashResponse>({
+    queryKey: ["trash"],
+    queryFn: () => api.getTrash() as Promise<TrashResponse>,
+  });
+
+  const emptyMutation = useMutation({
+    mutationFn: () => api.emptyTrash(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trash"] }),
+  });
+
+  const deleteItemMutation = useMutation({
+    mutationFn: (label: string) => api.deleteTrashItem(label),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["trash"] }),
+  });
+
+  const itemCount = trash?.items?.reduce((sum, i) => sum + i.files.length, 0) ?? 0;
+
+  return (
+    <details className="group">
+      <summary className="flex items-center justify-between py-2.5 px-3 rounded-xl bg-[#16213e] border border-white/5 cursor-pointer hover:border-white/10 transition list-none">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-orange-500/15 flex items-center justify-center">
+            <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </div>
+          <span className="text-sm font-semibold">{"\u30B4\u30DF\u7BB1"}</span>
+          {itemCount > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-500/20 text-orange-400">
+              {itemCount}
+            </span>
+          )}
+        </div>
+        <svg className="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </summary>
+      <div className="mt-2 rounded-xl bg-[#16213e] border border-white/5 p-4">
+        {(!trash || trash.items.length === 0) ? (
+          <p className="text-sm text-gray-500">{"\u30B4\u30DF\u7BB1\u306F\u7A7A\u3067\u3059"}</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                {itemCount} {"\u30D5\u30A1\u30A4\u30EB"} ({formatSize(trash.total_size)})
+              </p>
+              <button
+                onClick={() => emptyMutation.mutate()}
+                disabled={emptyMutation.isPending}
+                className="text-xs px-3 py-1 rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                {emptyMutation.isPending ? "\u524A\u9664\u4E2D..." : "\u3059\u3079\u3066\u524A\u9664"}
+              </button>
+            </div>
+            <div className="space-y-2">
+              {trash.items.map((item) => (
+                <div key={item.label} className="rounded-lg bg-black/20 border border-white/5 p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-medium text-gray-300 truncate">{item.label}</span>
+                    <button
+                      onClick={() => deleteItemMutation.mutate(item.label)}
+                      disabled={deleteItemMutation.isPending}
+                      className="text-[10px] text-red-400 hover:underline shrink-0 ml-2"
+                    >
+                      {"\u524A\u9664"}
+                    </button>
+                  </div>
+                  <ul className="space-y-0.5">
+                    {item.files.map((f) => (
+                      <li key={f.name} className="flex justify-between text-[11px]">
+                        <span className="text-gray-400 truncate">{f.name}</span>
+                        <span className="text-gray-600 ml-2 shrink-0">{formatSize(f.size)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </details>
   );
 }

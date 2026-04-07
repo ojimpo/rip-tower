@@ -62,6 +62,39 @@ async def finalize(job_id: str) -> None:
         album_dir = album_base
 
     output_dir = Path(config.output.music_dir) / artist_dir / album_dir
+
+    # Check for existing audio files that would conflict
+    existing = _find_existing_audio(output_dir)
+    if existing:
+        logger.info(
+            "Existing audio files found in %s: %d files, sending to review",
+            output_dir, len(existing),
+        )
+        async with async_session() as session:
+            j = await session.get(Job, job_id)
+            m = await session.execute(
+                select(JobMetadata).where(JobMetadata.job_id == job_id)
+            )
+            m = m.scalar_one_or_none()
+            if j and m:
+                # Add existing_files issue and revert to review
+                import json as _json
+                issues = _json.loads(m.issues) if m.issues else []
+                if "existing_files" not in issues:
+                    issues.append("existing_files")
+                    m.issues = _json.dumps(issues, ensure_ascii=False)
+                m.needs_review = True
+                j.status = "review"
+                await session.commit()
+
+            from backend.services.websocket import broadcast as ws_broadcast
+            await ws_broadcast("job:review", {
+                "job_id": job_id,
+                "reason": f"existing audio files in {output_dir}",
+                "existing_files": [str(f) for f in existing],
+            })
+        return
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy artwork
@@ -266,6 +299,55 @@ async def reapply_metadata(job_id: str) -> None:
             await session.commit()
 
     logger.info("Re-applied metadata for job %s → %s", job_id, target_dir)
+
+
+AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wma", ".alac", ".wav"}
+
+
+def _find_existing_audio(output_dir: Path) -> list[Path]:
+    """Find non-FLAC audio files already in the target directory.
+
+    Returns empty list if dir doesn't exist or has no audio files.
+    FLAC files are excluded since they could be from a previous rip of the same job.
+    """
+    if not output_dir.exists():
+        return []
+    return [
+        f for f in output_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+
+
+def move_to_trash(files: list[Path], trash_dir: Path, label: str = "") -> int:
+    """Move files to trash directory, preserving context via subdirectory.
+
+    Returns number of files moved.
+    """
+    if not files:
+        return 0
+
+    # Create a subdirectory in trash named after the source folder
+    sub = trash_dir / label if label else trash_dir
+    sub.mkdir(parents=True, exist_ok=True)
+
+    moved = 0
+    for f in files:
+        if f.exists():
+            dst = sub / f.name
+            # Avoid overwrite — append suffix if needed
+            if dst.exists():
+                dst = sub / f"{f.stem}_{moved}{f.suffix}"
+            shutil.move(str(f), str(dst))
+            moved += 1
+
+    # Also move macOS ._ resource fork junk
+    for f in files:
+        junk = f.parent / f"._{f.name}"
+        if junk.exists():
+            dst = sub / junk.name
+            shutil.move(str(junk), str(dst))
+
+    return moved
 
 
 async def _embed_artwork(flac_path: Path, artwork_path: Path) -> None:

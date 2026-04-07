@@ -440,6 +440,105 @@ async def apply_metadata(
     return {"status": "applying"}
 
 
+@router.get("/jobs/{job_id}/conflicts")
+async def get_conflicts(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """List existing audio files in the job's target directory."""
+    from pathlib import Path
+    from backend.config import get_config
+    from backend.services.finalizer import safe_dirname, _find_existing_audio
+
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    meta_result = await session.execute(
+        select(JobMetadata).where(JobMetadata.job_id == job_id)
+    )
+    meta = meta_result.scalar_one_or_none()
+    if not meta:
+        return {"files": []}
+
+    config = get_config()
+    artist_dir = safe_dirname(meta.artist or "Unknown Artist")
+    album_base = safe_dirname(
+        meta.album_base or meta.album or "Unknown Album"
+    )
+    if meta.disc_number and meta.total_discs and meta.total_discs > 1:
+        album_dir = f"{album_base} [DISC{meta.disc_number}]"
+    else:
+        album_dir = album_base
+
+    output_dir = Path(config.output.music_dir) / artist_dir / album_dir
+    existing = _find_existing_audio(output_dir)
+
+    return {
+        "output_dir": str(output_dir),
+        "files": [
+            {"name": f.name, "size": f.stat().st_size, "path": str(f)}
+            for f in sorted(existing)
+        ],
+    }
+
+
+@router.post("/jobs/{job_id}/conflicts/trash")
+async def trash_conflicts(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Move existing audio files in target directory to trash and clear the issue."""
+    import json
+    from pathlib import Path
+    from backend.config import get_config
+    from backend.services.finalizer import (
+        safe_dirname, _find_existing_audio, move_to_trash,
+    )
+
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    meta_result = await session.execute(
+        select(JobMetadata).where(JobMetadata.job_id == job_id)
+    )
+    meta = meta_result.scalar_one_or_none()
+    if not meta:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    config = get_config()
+    artist_dir = safe_dirname(meta.artist or "Unknown Artist")
+    album_base = safe_dirname(
+        meta.album_base or meta.album or "Unknown Album"
+    )
+    if meta.disc_number and meta.total_discs and meta.total_discs > 1:
+        album_dir = f"{album_base} [DISC{meta.disc_number}]"
+    else:
+        album_dir = album_base
+
+    output_dir = Path(config.output.music_dir) / artist_dir / album_dir
+    existing = _find_existing_audio(output_dir)
+
+    if not existing:
+        return {"status": "no_conflicts", "moved": 0}
+
+    trash_dir = Path(config.output.trash_dir)
+    label = f"{artist_dir} - {album_dir}"
+    moved = move_to_trash(existing, trash_dir, label)
+
+    # Clear existing_files issue
+    issues = json.loads(meta.issues) if meta.issues else []
+    if "existing_files" in issues:
+        issues.remove("existing_files")
+        meta.issues = json.dumps(issues, ensure_ascii=False) if issues else None
+        if not issues:
+            meta.needs_review = (meta.confidence or 0) < config.general.auto_approve_threshold
+    await session.commit()
+
+    return {"status": "trashed", "moved": moved, "trash_label": label}
+
+
 @router.post("/jobs/{job_id}/metadata/re-resolve")
 async def re_resolve(
     job_id: str,
@@ -685,6 +784,34 @@ async def select_artwork(
     return {"status": "selected"}
 
 
+@router.post("/jobs/{job_id}/kashidashi/re-match")
+async def re_match_kashidashi(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-run kashidashi matching with current metadata."""
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Clear existing candidates
+    existing = await session.execute(
+        select(KashidashiCandidate).where(KashidashiCandidate.job_id == job_id)
+    )
+    for c in existing.scalars():
+        await session.delete(c)
+    await session.commit()
+
+    # Re-run matching with restored identity
+    from backend.services.disc_identity import restore_identity
+    from backend.metadata.sources.kashidashi import match_kashidashi
+
+    identity = await restore_identity(job_id)
+    await match_kashidashi(job_id, identity)
+
+    return {"status": "re-matched"}
+
+
 @router.get("/jobs/{job_id}/kashidashi")
 async def list_kashidashi(
     job_id: str,
@@ -714,6 +841,11 @@ async def match_kashidashi(
     if not candidate or candidate.job_id != job_id:
         raise HTTPException(status_code=404, detail="Candidate not found")
     candidate.matched = True
+
+    # Auto-set source_type to library when kashidashi is matched
+    job = await session.get(Job, job_id)
+    if job and job.source_type == "unknown":
+        job.source_type = "library"
 
     await session.commit()
     return {"status": "matched"}

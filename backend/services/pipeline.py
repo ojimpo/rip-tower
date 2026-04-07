@@ -29,18 +29,24 @@ def _get_device_lock(drive_id: str) -> asyncio.Lock:
 
 async def _update_status(job_id: str, status: str, error: str | None = None) -> None:
     """Update job status in DB and broadcast via WebSocket."""
+    drive_id = None
     async with async_session() as session:
         job = await session.get(Job, job_id)
         if job:
+            drive_id = job.drive_id
             job.status = status
             if error:
                 job.error_message = error
-            if status == "complete":
+            if status == "complete" and not job.completed_at:
                 from datetime import datetime, timezone
                 job.completed_at = datetime.now(timezone.utc)
             await session.commit()
 
     await broadcast("job:status", {"job_id": job_id, "status": status})
+
+    # Notify frontend to refresh drive status when a job finishes
+    if status in ("complete", "error", "review") and drive_id:
+        await broadcast("drive:update", {"drive_id": drive_id})
 
 
 async def run_pipeline(job_id: str, request: RipRequest) -> None:
@@ -71,6 +77,15 @@ async def run_pipeline(job_id: str, request: RipRequest) -> None:
             from backend.services.encoder import encode_all
 
             await encode_all(job_id)
+
+            # Record encode completion time for elapsed time calculation
+            # (so review wait time isn't included in the displayed rip speed)
+            async with async_session() as session:
+                job = await session.get(Job, job_id)
+                if job and not job.completed_at:
+                    from datetime import datetime, timezone
+                    job.completed_at = datetime.now(timezone.utc)
+                    await session.commit()
 
             # 4. Check auto-approve
             await _check_approval(job_id)

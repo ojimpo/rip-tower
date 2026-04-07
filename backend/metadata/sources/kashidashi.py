@@ -250,6 +250,13 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
 
     if is_unique_match:
         target = scored[0][1]
+        # Auto-set source_type to library
+        async with async_session() as session:
+            from backend.models import Job
+            job = await session.get(Job, job_id)
+            if job and job.source_type == "unknown":
+                job.source_type = "library"
+                await session.commit()
         logger.info(
             "Kashidashi matched: job=%s -> item_id=%s (%s)",
             job_id, target.get("id"), target.get("title"),

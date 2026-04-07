@@ -71,7 +71,7 @@ export default function Dashboard() {
   const { data: drives } = useQuery<Drive[]>({
     queryKey: ["drives"],
     queryFn: () => api.getDrives() as Promise<Drive[]>,
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
 
   // Eject prompt: show banner when a job completes/enters review
@@ -96,8 +96,12 @@ export default function Dashboard() {
         next.delete(event.drive_id);
         return next;
       });
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
     }
-  }, [jobsData, drives]);
+    if (event.type === "drive:update") {
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
+    }
+  }, [jobsData, drives, queryClient]);
 
   useWebSocket(handleWsEvent);
 

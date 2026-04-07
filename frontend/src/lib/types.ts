@@ -145,6 +145,28 @@ export interface HistoryItem {
   kashidashi_id: string | null;
 }
 
+export interface ConflictFile {
+  name: string;
+  size: number;
+  path: string;
+}
+
+export interface ConflictsResponse {
+  output_dir: string;
+  files: ConflictFile[];
+}
+
+export interface TrashItem {
+  label: string;
+  files: { name: string; size: number }[];
+  total_size: number;
+}
+
+export interface TrashResponse {
+  items: TrashItem[];
+  total_size: number;
+}
+
 export type WsEvent =
   | { type: "job:status"; job_id: string; status: string }
   | { type: "job:progress"; job_id: string; track: number; total: number; percent: number }
@@ -155,4 +177,5 @@ export type WsEvent =
   | { type: "drive:connected"; drive_id: string; name: string; path: string }
   | { type: "drive:disconnected"; drive_id: string; name: string }
   | { type: "drive:disc_inserted"; drive_id: string }
-  | { type: "drive:disc_ejected"; drive_id: string };
+  | { type: "drive:disc_ejected"; drive_id: string }
+  | { type: "drive:update"; drive_id: string };

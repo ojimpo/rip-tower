@@ -52,6 +52,7 @@ class OutputConfig(BaseModel):
     quality: int = 8
     music_dir: str = "/mnt/media/music"
     incoming_dir: str = "/mnt/media/audio/_incoming"
+    trash_dir: str = "/app/data/trash"
     folder_template: str = "{artist}/{album}"
     file_template: str = "{track_num} {artist} - {title}"
 

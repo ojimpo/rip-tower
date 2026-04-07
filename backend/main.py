@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import get_config
-from backend.routers import drives, history, jobs, settings_router
+from backend.routers import drives, history, jobs, settings_router, trash
 from backend.services.websocket import router as ws_router
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,7 @@ app.include_router(jobs.router, prefix="/api")
 app.include_router(drives.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
+app.include_router(trash.router, prefix="/api")
 app.include_router(ws_router)
 
 # Serve frontend static files (production)
