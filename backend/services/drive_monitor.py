@@ -5,15 +5,44 @@ Identifies drives by USB serial number (via udevadm).
 """
 
 import asyncio
+import fcntl
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Track the hotplug watcher task to prevent duplicates
+# Track background tasks to prevent duplicates
 _hotplug_task: asyncio.Task | None = None
+_disc_poll_task: asyncio.Task | None = None
+
+# ioctl constants for CDROM_DRIVE_STATUS
+_CDROM_DRIVE_STATUS = 0x5326
+CDS_NO_INFO = 0
+CDS_NO_DISC = 1
+CDS_TRAY_OPEN = 2
+CDS_DRIVE_NOT_READY = 3
+CDS_DISC_OK = 4
+
+
+def get_tray_status(dev_path: str) -> int:
+    """Get CD drive tray status via ioctl.
+
+    Returns one of CDS_NO_INFO, CDS_NO_DISC, CDS_TRAY_OPEN,
+    CDS_DRIVE_NOT_READY, CDS_DISC_OK.
+    Returns CDS_NO_INFO on error.
+    """
+    try:
+        fd = os.open(dev_path, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            status = fcntl.ioctl(fd, _CDROM_DRIVE_STATUS, 0)
+            return status
+        finally:
+            os.close(fd)
+    except OSError:
+        return CDS_NO_INFO
 
 
 def _get_drive_info(dev_path: str) -> dict | None:
@@ -65,17 +94,20 @@ def _get_drive_info(dev_path: str) -> dict | None:
 def scan_drives() -> list[dict]:
     """Scan for connected CD/DVD drives.
 
-    Returns list of {"path": "/dev/sr0", "serial": "...", "model": "..."}.
+    Returns list of {"path": "/dev/sr0", "serial": "...", "model": "...", "has_disc": bool, "tray_open": bool}.
     """
     drives = []
     for dev in sorted(Path("/dev").glob("sr*")):
         dev_path = str(dev)
         info = _get_drive_info(dev_path)
         if info:
+            tray_status = get_tray_status(dev_path)
             drives.append({
                 "path": dev_path,
                 "serial": info["serial"],
                 "model": info["model"],
+                "has_disc": tray_status == CDS_DISC_OK,
+                "tray_open": tray_status == CDS_TRAY_OPEN,
             })
     return drives
 
@@ -143,10 +175,12 @@ async def start_monitoring() -> None:
         logger.info("Auto-rip triggered for drive %s (source_type=%s)", drive_id, source_type)
         await _trigger_auto_rip(drive_id, source_type)
 
-    # Start background hotplug watcher (only if not already running)
-    global _hotplug_task
+    # Start background tasks (only if not already running)
+    global _hotplug_task, _disc_poll_task
     if _hotplug_task is None or _hotplug_task.done():
         _hotplug_task = asyncio.create_task(_watch_hotplug())
+    if _disc_poll_task is None or _disc_poll_task.done():
+        _disc_poll_task = asyncio.create_task(_poll_disc_status())
 
 
 async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
@@ -250,3 +284,119 @@ async def _watch_hotplug() -> None:
                 await _rescan_drives()
     except Exception:
         logger.exception("Hotplug watcher failed")
+
+
+# Previous disc state per drive_id: True = disc present, False = no disc
+_prev_disc_state: dict[str, bool] = {}
+
+
+async def _auto_identify(drive, session) -> "DiscInfo | None":
+    """Run disc identification and cache results. Returns DiscInfo or None on failure."""
+    from backend.services.disc_identify import DiscInfo, identify
+
+    try:
+        info = await identify(drive.current_path)
+        drive.cached_disc_id = info.disc_id
+        drive.cached_artist = info.artist
+        drive.cached_album = info.album
+        drive.cached_track_count = info.track_count
+        await session.commit()
+        logger.info(
+            "Auto-identified disc in %s: %s / %s (%d tracks)",
+            drive.name, info.artist or "?", info.album or "?", info.track_count,
+        )
+        return info
+    except Exception:
+        logger.warning("Auto-identify failed for %s", drive.name)
+        return None
+
+
+async def _notify_disc_inserted(drive, disc_info: "DiscInfo | None") -> None:
+    """Send a Discord notification when a disc is inserted."""
+    from backend.services.notifier import _send_discord
+    from backend.config import get_config
+
+    config = get_config()
+    base = config.general.base_url.rstrip("/")
+
+    if disc_info and (disc_info.artist or disc_info.album):
+        artist = disc_info.artist or "不明"
+        album = disc_info.album or "不明"
+        msg = f"💿 CD検出：{artist} / {album}（{disc_info.track_count}曲）\nドライブ：{drive.name}"
+    else:
+        msg = f"💿 CD検出（情報取得不可）\nドライブ：{drive.name}"
+
+    if base:
+        msg += f"\n{base}/"
+
+    await _send_discord(msg)
+
+
+async def _poll_disc_status() -> None:
+    """Periodically check tray/disc status via ioctl and broadcast changes."""
+    from backend.database import async_session
+    from backend.models import Drive, Job
+    from backend.services.websocket import broadcast
+    from sqlalchemy import select
+
+    global _prev_disc_state
+
+    while True:
+        await asyncio.sleep(3)
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(Drive).where(Drive.current_path.isnot(None))
+                )
+                drives = result.scalars().all()
+
+                for drive in drives:
+                    tray_status = await asyncio.to_thread(
+                        get_tray_status, drive.current_path
+                    )
+                    has_disc = tray_status == CDS_DISC_OK
+                    prev = _prev_disc_state.get(drive.drive_id)
+
+                    if prev is not None and prev != has_disc:
+                        if has_disc:
+                            logger.info("Disc inserted in %s (%s)", drive.name, drive.drive_id)
+
+                            # Auto-identify the disc
+                            disc_info = await _auto_identify(drive, session)
+
+                            await broadcast("drive:disc_inserted", {
+                                "drive_id": drive.drive_id,
+                                "name": drive.name,
+                            })
+
+                            # Discord notification
+                            await _notify_disc_inserted(drive, disc_info)
+
+                            # Trigger auto-rip if enabled
+                            if drive.auto_rip:
+                                active_job = await session.execute(
+                                    select(Job)
+                                    .where(Job.drive_id == drive.drive_id)
+                                    .where(Job.status.notin_(["complete", "error"]))
+                                    .limit(1)
+                                )
+                                if not active_job.scalar_one_or_none():
+                                    logger.info("Auto-rip triggered (disc poll) for drive %s", drive.drive_id)
+                                    await _trigger_auto_rip(drive.drive_id, drive.auto_rip_source_type)
+                        else:
+                            logger.info("Disc ejected from %s (%s)", drive.name, drive.drive_id)
+                            # Clear cached disc info
+                            drive.cached_disc_id = None
+                            drive.cached_artist = None
+                            drive.cached_album = None
+                            drive.cached_track_count = None
+                            await session.commit()
+                            await broadcast("drive:disc_ejected", {
+                                "drive_id": drive.drive_id,
+                                "name": drive.name,
+                            })
+
+                    _prev_disc_state[drive.drive_id] = has_disc
+
+        except Exception:
+            logger.exception("Disc poll error")

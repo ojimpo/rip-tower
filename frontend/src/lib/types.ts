@@ -6,6 +6,7 @@ export interface Drive {
   model: string | null;
   serial: string | null;
   has_disc: boolean;
+  tray_open: boolean;
   disc_info: {
     artist: string | null;
     album: string | null;

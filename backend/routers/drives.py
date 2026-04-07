@@ -43,9 +43,16 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
 
     items = []
     for drive in drives:
-        # Check if there's an active job on this drive (disc info)
+        # Check actual tray/disc status via ioctl
         disc_info = None
-        has_disc = drive.current_path is not None
+        if drive.current_path:
+            from backend.services.drive_monitor import get_tray_status, CDS_DISC_OK, CDS_TRAY_OPEN
+            tray_status = get_tray_status(drive.current_path)
+            has_disc = tray_status == CDS_DISC_OK
+            tray_open = tray_status == CDS_TRAY_OPEN
+        else:
+            has_disc = False
+            tray_open = False
         if drive.current_path:
             active_job = await session.execute(
                 select(Job)
@@ -95,6 +102,7 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
             "current_path": drive.current_path,
             "last_seen_at": drive.last_seen_at.replace(tzinfo=timezone.utc).isoformat() if drive.last_seen_at else None,
             "has_disc": has_disc,
+            "tray_open": tray_open,
             "disc_info": disc_info,
             "auto_rip": drive.auto_rip,
             "auto_rip_source_type": drive.auto_rip_source_type,
@@ -151,6 +159,20 @@ async def eject_drive(
             detail=f"Eject failed: {stderr.decode().strip()}",
         )
 
+    # Clear cached disc info
+    drive.cached_disc_id = None
+    drive.cached_artist = None
+    drive.cached_album = None
+    drive.cached_track_count = None
+    await session.commit()
+
+    # Broadcast eject event
+    from backend.services.websocket import broadcast
+    await broadcast("drive:disc_ejected", {
+        "drive_id": drive_id,
+        "name": drive.name,
+    })
+
     return {"status": "ejected", "drive_id": drive_id}
 
 
@@ -160,68 +182,29 @@ async def identify_disc(
     session: AsyncSession = Depends(get_session),
 ):
     """Read disc identity and do a quick metadata lookup without starting a full rip."""
+    from backend.services.disc_identify import identify
+
     drive = await session.get(Drive, drive_id)
     if not drive:
         raise HTTPException(status_code=404, detail="Drive not found")
     if not drive.current_path:
         raise HTTPException(status_code=400, detail="Drive not connected")
 
-    # Run cd-discid
-    proc = await asyncio.create_subprocess_exec(
-        "cd-discid", drive.current_path,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-
-    if proc.returncode != 0:
-        raise HTTPException(status_code=500, detail=f"cd-discid failed: {stderr.decode().strip()}")
-
-    raw = stdout.decode().strip()
-    parts = raw.split()
-    disc_id = parts[0].lower() if parts else "unknown"
-    track_count = int(parts[1]) if len(parts) > 1 else 0
-    offsets = [int(x) for x in parts[2:2 + track_count]] if len(parts) > 2 else []
-    leadout_seconds = int(parts[2 + track_count]) if len(parts) > 2 + track_count else 0
-
-    # Quick MusicBrainz lookup via TOC
-    # cd-discid gives offsets in sectors, leadout in seconds → convert to sectors
-    import httpx
-    artist = None
-    album = None
-    if offsets and leadout_seconds:
-        leadout_sectors = leadout_seconds * 75
-        toc = f"1 {track_count} {leadout_sectors} {' '.join(str(o) for o in offsets)}"
-        try:
-            async with httpx.AsyncClient(
-                headers={"User-Agent": "RipTower/0.1.0"},
-                timeout=10,
-            ) as client:
-                resp = await client.get(
-                    "https://musicbrainz.org/ws/2/discid/-",
-                    params={"toc": toc, "fmt": "json", "inc": "artist-credits"},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    releases = data.get("releases", [])
-                    if releases:
-                        rel = releases[0]
-                        ac = rel.get("artist-credit", [])
-                        artist = ac[0].get("name", "") if ac and isinstance(ac[0], dict) else None
-                        album = rel.get("title")
-        except Exception:
-            pass
+    try:
+        info = await identify(drive.current_path)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Save to drive cache
-    drive.cached_disc_id = disc_id
-    drive.cached_artist = artist
-    drive.cached_album = album
-    drive.cached_track_count = track_count
+    drive.cached_disc_id = info.disc_id
+    drive.cached_artist = info.artist
+    drive.cached_album = info.album
+    drive.cached_track_count = info.track_count
     await session.commit()
 
     return {
-        "disc_id": disc_id,
-        "track_count": track_count,
-        "artist": artist,
-        "album": album,
+        "disc_id": info.disc_id,
+        "track_count": info.track_count,
+        "artist": info.artist,
+        "album": info.album,
     }

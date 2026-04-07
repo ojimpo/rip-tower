@@ -111,6 +111,8 @@ export default function Dashboard() {
   const [ripTotalDiscs, setRipTotalDiscs] = useState<string>("");
   const [ripError, setRipError] = useState<string | null>(null);
   const [identifyingDrives, setIdentifyingDrives] = useState<Set<string>>(new Set());
+  const [ejectingDrives, setEjectingDrives] = useState<Set<string>>(new Set());
+  const [ejectedDrives, setEjectedDrives] = useState<Set<string>>(new Set());
 
   const ripMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.startRip(body) as Promise<{ job_id: string }>,
@@ -176,10 +178,29 @@ export default function Dashboard() {
     }
   };
 
+  const handleEject = (driveId: string) => {
+    if (ejectingDrives.has(driveId) || ejectedDrives.has(driveId)) return;
+    setEjectingDrives((prev) => new Set(prev).add(driveId));
+    api.ejectDrive(driveId)
+      .then(() => {
+        setEjectedDrives((prev) => new Set(prev).add(driveId));
+        setTimeout(() => setEjectedDrives((prev) => {
+          const next = new Set(prev);
+          next.delete(driveId);
+          return next;
+        }), 2000);
+      })
+      .finally(() => setEjectingDrives((prev) => {
+        const next = new Set(prev);
+        next.delete(driveId);
+        return next;
+      }));
+  };
+
   const handleEjectAll = () => {
     const onlineDrives = (drives ?? []).filter((d) => d.current_path);
     for (const drive of onlineDrives) {
-      api.ejectDrive(drive.drive_id);
+      handleEject(drive.drive_id);
     }
   };
 
@@ -305,16 +326,17 @@ export default function Dashboard() {
                 </div>
                 <button
                   onClick={() => {
-                    api.ejectDrive(drive.drive_id);
+                    handleEject(drive.drive_id);
                     setEjectPromptDrives((prev) => {
                       const next = new Set(prev);
                       next.delete(drive.drive_id);
                       return next;
                     });
                   }}
-                  className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 text-xs font-medium hover:bg-cyan-500/30 transition"
+                  disabled={ejectingDrives.has(drive.drive_id) || ejectedDrives.has(drive.drive_id)}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 text-xs font-medium hover:bg-cyan-500/30 transition disabled:opacity-50"
                 >
-                  Eject
+                  {ejectedDrives.has(drive.drive_id) ? "\u2713" : ejectingDrives.has(drive.drive_id) ? "..." : "Eject"}
                 </button>
               </div>
             ))}
@@ -458,7 +480,7 @@ export default function Dashboard() {
                             </span>
                           )}
                           {isOnline && !drive.has_disc && (
-                              <span className="text-xs text-gray-600">{"\u7A7A"}</span>
+                              <span className="text-xs text-gray-600">{drive.tray_open ? "\u30C8\u30EC\u30A4\u958B" : "\u7A7A"}</span>
                           )}
                           {drive.auto_rip && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e94560]/15 text-[#e94560] font-medium">
@@ -510,14 +532,23 @@ export default function Dashboard() {
                         <button
                           onClick={(e) => {
                             e.preventDefault();
-                            api.ejectDrive(drive.drive_id);
+                            handleEject(drive.drive_id);
                           }}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
+                          disabled={ejectingDrives.has(drive.drive_id) || ejectedDrives.has(drive.drive_id)}
+                          className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition disabled:opacity-50"
                           title="Eject"
                         >
-                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />
-                          </svg>
+                          {ejectedDrives.has(drive.drive_id) ? (
+                            <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            <svg className={`w-4 h-4${ejectingDrives.has(drive.drive_id) ? " animate-spin" : ""}`} fill="currentColor" viewBox="0 0 24 24">
+                              {ejectingDrives.has(drive.drive_id)
+                                ? <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 18a8 8 0 110-16 8 8 0 010 16z" fillOpacity=".3" />
+                                : <path d="M12 5l-8 8h16l-8-8zM4 15h16v2H4v-2z" />}
+                            </svg>
+                          )}
                         </button>
                       )}
                       {/* Rip / Ripping button — rightmost */}
