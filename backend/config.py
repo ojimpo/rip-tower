@@ -58,6 +58,8 @@ class OutputConfig(BaseModel):
 
 class IntegrationsConfig(BaseModel):
     discord_webhook: str = ""
+    discord_bot_token: str = ""
+    discord_channel_id: str = ""
     discogs_token: str = ""
     musixmatch_token: str = ""
     plex_url: str = ""

@@ -34,16 +34,48 @@ async def _send_discord(
     content: str,
     reply_to: str | None = None,
 ) -> str | None:
-    """Send a message to Discord via webhook.
+    """Send a message to Discord.
 
-    Returns the message ID if ?wait=true succeeds, otherwise None.
-    If reply_to is set, the message is sent as a reply.
+    If reply_to is set AND bot token is configured, uses the Bot API to
+    create a true reply.  Otherwise falls back to webhook.
+    Returns the message ID on success, None otherwise.
     """
     config = get_config()
+    bot_token = config.integrations.discord_bot_token
+    channel_id = config.integrations.discord_channel_id
+
+    # Use Bot API if configured (required for replies)
+    if bot_token and channel_id:
+        return await _send_via_bot(content, bot_token, channel_id, reply_to)
+
+    # Fallback: webhook (no reply support)
     url = config.integrations.discord_webhook
     if not url:
         return None
 
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{url}?wait=true",
+                json={"content": content},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("id")
+            logger.warning("Discord webhook returned %d", resp.status_code)
+        except Exception:
+            logger.exception("Discord notification failed")
+
+    return None
+
+
+async def _send_via_bot(
+    content: str,
+    bot_token: str,
+    channel_id: str,
+    reply_to: str | None = None,
+) -> str | None:
+    """Send a message via Discord Bot API, optionally as a reply."""
     payload: dict = {"content": content}
     if reply_to:
         payload["message_reference"] = {"message_id": reply_to}
@@ -52,16 +84,19 @@ async def _send_discord(
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
-                f"{url}?wait=true",
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers={
+                    "Authorization": f"Bot {bot_token}",
+                    "Content-Type": "application/json",
+                },
                 json=payload,
                 timeout=10,
             )
             if resp.status_code == 200:
-                data = resp.json()
-                return data.get("id")
-            logger.warning("Discord webhook returned %d", resp.status_code)
+                return resp.json().get("id")
+            logger.warning("Discord Bot API returned %d: %s", resp.status_code, resp.text[:200])
         except Exception:
-            logger.exception("Discord notification failed")
+            logger.exception("Discord Bot API failed")
 
     return None
 
