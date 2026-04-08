@@ -127,15 +127,23 @@ async def _query_source(source, job_id: str, identity, hints: dict | None) -> No
 async def _apply_forced(job_id: str, force: dict) -> None:
     """Apply forced metadata directly."""
     async with async_session() as session:
-        meta = JobMetadata(
-            job_id=job_id,
-            artist=force.get("artist"),
-            album=force.get("album"),
-            confidence=100,
-            source="forced",
-            approved=True,
-        )
-        session.add(meta)
+        existing = await session.get(JobMetadata, job_id)
+        if existing:
+            existing.artist = force.get("artist") or existing.artist
+            existing.album = force.get("album") or existing.album
+            existing.confidence = 100
+            existing.source = "forced"
+            existing.approved = True
+        else:
+            meta = JobMetadata(
+                job_id=job_id,
+                artist=force.get("artist"),
+                album=force.get("album"),
+                confidence=100,
+                source="forced",
+                approved=True,
+            )
+            session.add(meta)
         await session.commit()
 
 
@@ -253,14 +261,15 @@ async def _auto_match_album_group(job_id: str) -> None:
         our_artist_norm = norm(our_artist)
         our_album_norm = norm(our_album_base)
 
-        # Find other recent ungrouped jobs (regardless of total_discs)
+        # Find other recent jobs with matching artist + album_base.
+        # Include both ungrouped AND already-grouped jobs so that the 3rd disc
+        # of a 3-disc set can join an existing group created by the first two.
         cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
         result = await session.execute(
             select(Job, JobMetadata)
             .join(JobMetadata, Job.id == JobMetadata.job_id)
             .where(
                 Job.id != job_id,
-                Job.album_group.is_(None),
                 Job.created_at >= cutoff,
             )
         )
@@ -270,43 +279,84 @@ async def _auto_match_album_group(job_id: str) -> None:
             return
 
         # Match by normalized artist + album_base
-        matched_jobs: list[tuple[Job, JobMetadata]] = [(job, meta)]
+        matched_ungrouped: list[tuple[Job, JobMetadata]] = []
+        existing_group_id: str | None = None
         for cand_job, cand_meta in candidates:
             cand_album_base = cand_meta.album_base or cand_meta.album
             cand_artist = cand_meta.artist
             if not cand_album_base or not cand_artist:
                 continue
             if norm(cand_artist) == our_artist_norm and norm(cand_album_base) == our_album_norm:
-                matched_jobs.append((cand_job, cand_meta))
+                if cand_job.album_group:
+                    existing_group_id = cand_job.album_group
+                else:
+                    matched_ungrouped.append((cand_job, cand_meta))
 
-        if len(matched_jobs) < 2:
-            return  # No match found
+        # If an existing group was found, join it
+        if existing_group_id:
+            job.album_group = existing_group_id
+            # Count total members to update total_discs
+            group_result = await session.execute(
+                select(Job).where(Job.album_group == existing_group_id)
+            )
+            group_size = len(group_result.scalars().all()) + 1  # +1 for this job
+            # Update total_discs for all members
+            group_metas = await session.execute(
+                select(JobMetadata)
+                .join(Job, Job.id == JobMetadata.job_id)
+                .where(Job.album_group == existing_group_id)
+            )
+            used_numbers = set()
+            for gm in group_metas.scalars():
+                gm.total_discs = group_size
+                if gm.disc_number and gm.disc_number > 0:
+                    used_numbers.add(gm.disc_number)
+            meta.total_discs = group_size
+            # Assign disc_number if not set
+            if not meta.disc_number or meta.disc_number < 1:
+                next_num = 1
+                while next_num in used_numbers:
+                    next_num += 1
+                meta.disc_number = next_num
+            await session.commit()
+            logger.info(
+                "Joined existing album group %s as disc %d/%d for job %s",
+                existing_group_id, meta.disc_number, group_size, job_id,
+            )
+            await broadcast("job:group", {
+                "album_group": existing_group_id,
+                "job_ids": [job_id],
+            })
+            return
 
-        # At least one job in the group must indicate multi-disc
-        # (total_discs > 1 or disc_number extracted from album name)
+        # No existing group — try to create a new one from ungrouped matches
+        all_matched: list[tuple[Job, JobMetadata]] = [(job, meta)] + matched_ungrouped
+        if len(all_matched) < 2:
+            return
+
+        # At least one job must indicate multi-disc
         has_multi_disc_signal = any(
             (m.total_discs and m.total_discs > 1) or (m.disc_number and m.disc_number > 1)
-            for _, m in matched_jobs
+            for _, m in all_matched
         )
         if not has_multi_disc_signal:
             return  # Could be separate single-disc albums by same artist
 
-        # Create shared album_group
         import uuid
 
         group_id = str(uuid.uuid4())
 
         # Sort by disc_number if available, else by creation time
-        matched_jobs.sort(
+        all_matched.sort(
             key=lambda jm: (jm[1].disc_number or 999, jm[0].created_at)
         )
 
         # Assign disc numbers sequentially for jobs that don't have one
-        used_numbers = {m.disc_number for _, m in matched_jobs if m.disc_number and m.disc_number > 0}
+        used_numbers = {m.disc_number for _, m in all_matched if m.disc_number and m.disc_number > 0}
         next_num = 1
-        for matched_job, matched_meta in matched_jobs:
+        for matched_job, matched_meta in all_matched:
             matched_job.album_group = group_id
-            matched_meta.total_discs = len(matched_jobs)
+            matched_meta.total_discs = len(all_matched)
             if not matched_meta.disc_number or matched_meta.disc_number < 1:
                 while next_num in used_numbers:
                     next_num += 1
@@ -316,10 +366,10 @@ async def _auto_match_album_group(job_id: str) -> None:
 
         await session.commit()
 
-        job_ids = [j.id for j, _ in matched_jobs]
+        job_ids = [j.id for j, _ in all_matched]
         logger.info(
             "Auto-matched album group %s for %d discs: %s (artist=%s, album=%s)",
-            group_id, len(matched_jobs), job_ids, our_artist, our_album_base,
+            group_id, len(all_matched), job_ids, our_artist, our_album_base,
         )
 
         await broadcast("job:group", {

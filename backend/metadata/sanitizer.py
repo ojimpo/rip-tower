@@ -81,9 +81,11 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
             pass
 
     # If disc_number was extracted from album name but no total_discs from source,
-    # infer total_discs >= disc_number (at least 2) so auto-grouping can kick in
+    # infer total_discs >= disc_number (at least 2) so auto-grouping can kick in.
+    # This is a guess — don't override user-set or existing total_discs with it.
+    inferred_total_discs = None
     if disc_number and disc_number >= 1 and not source_total_discs:
-        source_total_discs = max(disc_number, 2)
+        inferred_total_discs = max(disc_number, 2)
 
     # Compilation detection from track titles
     is_compilation = False
@@ -199,10 +201,11 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
             existing.year = year
             existing.genre = genre
             existing.disc_number = disc_number or existing.disc_number or 1
-            # Use source total_discs > user-set total_discs > existing > 1
+            # Priority: source > existing (user-set or prior) > inferred > 1
             existing.total_discs = (
                 source_total_discs
                 or (existing.total_discs if existing.total_discs and existing.total_discs > 1 else None)
+                or inferred_total_discs
                 or 1
             )
             existing.is_compilation = is_compilation
@@ -221,7 +224,7 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
                 year=year,
                 genre=genre,
                 disc_number=disc_number or 1,
-                total_discs=source_total_discs or 1,
+                total_discs=source_total_discs or inferred_total_discs or 1,
                 is_compilation=is_compilation,
                 confidence=confidence,
                 source=best.source,

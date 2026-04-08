@@ -218,8 +218,8 @@ export default function Dashboard() {
   };
 
   const handleEjectAll = () => {
-    const onlineDrives = (drives ?? []).filter((d) => d.current_path);
-    for (const drive of onlineDrives) {
+    const safeDrives = (drives ?? []).filter((d) => d.current_path && !d.active_job_id);
+    for (const drive of safeDrives) {
       handleEject(drive.drive_id);
     }
   };
@@ -556,7 +556,7 @@ export default function Dashboard() {
                         </button>
                       )}
                       {/* Eject */}
-                      {isOnline && (
+                      {isOnline && !hasActiveJob && (
                         <button
                           onClick={(e) => {
                             e.preventDefault();
@@ -775,9 +775,13 @@ export default function Dashboard() {
               </div>
             </div>
 
+            {ripAllMultiDisc && new Set(Object.values(ripAllDiscNumbers)).size !== rippableDrives.length && (
+              <p className="text-xs text-red-400">ディスク番号が重複しています</p>
+            )}
+
             <button
               onClick={handleRipAll}
-              disabled={ripAllPending}
+              disabled={ripAllPending || (ripAllMultiDisc && new Set(Object.values(ripAllDiscNumbers)).size !== rippableDrives.length)}
               className="w-full py-3 rounded-xl bg-gradient-to-r from-[#e94560] to-pink-600 text-sm font-bold text-white shadow-lg shadow-[#e94560]/20 hover:shadow-[#e94560]/40 active:scale-[0.98] transition-all disabled:opacity-50"
             >
               {ripAllPending ? "Starting..." : `${rippableDrives.length}台まとめてリッピング開始`}

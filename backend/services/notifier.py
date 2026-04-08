@@ -261,37 +261,17 @@ async def schedule_reminder(job_id: str) -> None:
             if not job or job.status != "review":
                 return  # Job was approved or deleted
 
-        # Collect all pending review jobs for a combined notification
-        async with async_session() as session:
-            result = await session.execute(
-                select(Job, JobMetadata)
-                .outerjoin(JobMetadata, Job.id == JobMetadata.job_id)
-                .where(Job.status == "review")
+            meta = await session.execute(
+                select(JobMetadata).where(JobMetadata.job_id == job_id)
             )
-            pending = result.all()
+            meta = meta.scalar_one_or_none()
 
-        if not pending:
-            return
+        album = meta.album if meta else "不明"
+        reply_to = job.discord_message_id if job else None
 
-        if len(pending) == 1:
-            job, meta = pending[0]
-            album = meta.album if meta else "不明"
-            reply_to = job.discord_message_id
-            await _send_discord(
-                f"未承認ジョブ（1件）：{album}\n{_job_url(job.id)}",
-                reply_to=reply_to,
-            )
-        else:
-            lines = []
-            for job, meta in pending:
-                album = meta.album if meta else "不明"
-                lines.append(f"  - {album}")
-            config = get_config()
-            base = config.general.base_url.rstrip("/") or ""
-            await _send_discord(
-                f"未承認ジョブ（{len(pending)}件）\n"
-                + "\n".join(lines)
-                + f"\n{base}/"
-            )
+        await _send_discord(
+            f"⏳ 未承認：{album}\n{_job_url(job_id)}",
+            reply_to=reply_to,
+        )
 
         await asyncio.sleep(interval_hours * 3600)
