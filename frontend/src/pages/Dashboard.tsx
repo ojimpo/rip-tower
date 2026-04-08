@@ -163,6 +163,9 @@ export default function Dashboard() {
   const [ripAllDialog, setRipAllDialog] = useState(false);
   const [ripAllSourceType, setRipAllSourceType] = useState("unknown");
   const [ripAllPending, setRipAllPending] = useState(false);
+  const [ripAllMultiDisc, setRipAllMultiDisc] = useState(false);
+  // Map drive_id -> disc_number (auto-assigned when multi-disc enabled)
+  const [ripAllDiscNumbers, setRipAllDiscNumbers] = useState<Record<string, number>>({});
 
   const rippableDrives = (drives ?? []).filter(
     (d) => d.current_path && d.has_disc && !d.active_job_id
@@ -171,8 +174,21 @@ export default function Dashboard() {
   const handleRipAll = async () => {
     setRipAllPending(true);
     try {
+      // Generate shared album_group when multi-disc is enabled
+      const albumGroup = ripAllMultiDisc ? crypto.randomUUID() : undefined;
+      const totalDiscs = ripAllMultiDisc ? rippableDrives.length : undefined;
+
       for (const drive of rippableDrives) {
-        await api.startRip({ drive_id: drive.drive_id, source_type: ripAllSourceType });
+        const discNumber = ripAllMultiDisc ? (ripAllDiscNumbers[drive.drive_id] ?? 1) : undefined;
+        await api.startRip({
+          drive_id: drive.drive_id,
+          source_type: ripAllSourceType,
+          ...(ripAllMultiDisc && {
+            album_group: albumGroup,
+            disc_number: discNumber,
+            total_discs: totalDiscs,
+          }),
+        });
       }
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["drives"] });
@@ -455,7 +471,15 @@ export default function Dashboard() {
                   Eject All
                 </button>
                 <button
-                  onClick={() => { setRipAllSourceType("unknown"); setRipAllDialog(true); }}
+                  onClick={() => {
+                    setRipAllSourceType("unknown");
+                    setRipAllMultiDisc(false);
+                    // Auto-assign disc numbers 1, 2, 3... based on drive order
+                    const nums: Record<string, number> = {};
+                    rippableDrives.forEach((d, i) => { nums[d.drive_id] = i + 1; });
+                    setRipAllDiscNumbers(nums);
+                    setRipAllDialog(true);
+                  }}
                   className="text-[10px] px-2 py-1 rounded-md bg-[#e94560]/20 text-[#e94560] hover:bg-[#e94560]/30 transition font-medium"
                 >
                   Rip All
@@ -700,6 +724,17 @@ export default function Dashboard() {
               {rippableDrives.map((d) => (
                 <div key={d.drive_id} className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                  {ripAllMultiDisc && (
+                    <select
+                      value={ripAllDiscNumbers[d.drive_id] ?? 1}
+                      onChange={(e) => setRipAllDiscNumbers((prev) => ({ ...prev, [d.drive_id]: parseInt(e.target.value) }))}
+                      className="w-14 bg-white/10 rounded px-1 py-0.5 text-white text-xs"
+                    >
+                      {rippableDrives.map((_, i) => (
+                        <option key={i + 1} value={i + 1}>Disc {i + 1}</option>
+                      ))}
+                    </select>
+                  )}
                   <span>{d.name}</span>
                   {d.disc_info && (
                     <span className="text-gray-500">
@@ -709,6 +744,17 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+
+            {/* Multi-disc toggle */}
+            <label className="flex items-center gap-2 cursor-pointer">
+              <div
+                className={`w-9 h-5 rounded-full transition relative ${ripAllMultiDisc ? "bg-[#e94560]" : "bg-white/10"}`}
+                onClick={() => setRipAllMultiDisc((v) => !v)}
+              >
+                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${ripAllMultiDisc ? "left-[18px]" : "left-0.5"}`} />
+              </div>
+              <span className="text-xs text-gray-300">複数枚組アルバム</span>
+            </label>
 
             <div>
               <label className="text-xs text-gray-400 mb-1.5 block">ソース種別</label>

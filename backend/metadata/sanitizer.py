@@ -80,6 +80,11 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         except (json.JSONDecodeError, TypeError):
             pass
 
+    # If disc_number was extracted from album name but no total_discs from source,
+    # infer total_discs >= disc_number (at least 2) so auto-grouping can kick in
+    if disc_number and disc_number >= 1 and not source_total_discs:
+        source_total_discs = max(disc_number, 2)
+
     # Compilation detection from track titles
     is_compilation = False
     track_titles: list[str] = []

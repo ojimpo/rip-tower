@@ -81,6 +81,10 @@ async def resolve(
         if assisted:
             best = await sanitize_candidates(job_id)
 
+    # Auto-match multi-disc albums that were ripped without album_group
+    if best:
+        await _auto_match_album_group(job_id)
+
     # Sync shared metadata from album group siblings if available
     if best:
         await _sync_from_group(job_id, best)
@@ -211,3 +215,114 @@ async def _sync_from_group(job_id: str, meta: Any) -> None:
                 "Synced group metadata for job %s from sibling %s: %s",
                 job_id, sibling.job_id, synced,
             )
+
+
+async def _auto_match_album_group(job_id: str) -> None:
+    """Auto-detect and link multi-disc albums that were ripped without album_group.
+
+    Triggered after metadata resolution. Two matching strategies:
+
+    1. This job has total_discs > 1 (from source or album name like "[Disc 1]"):
+       Search for other recent ungrouped jobs with the same artist + album_base.
+    2. This job has total_discs == 1 but a sibling with total_discs > 1 already
+       matched us by artist + album_base — we get pulled in by strategy 1 of
+       the sibling's resolution.
+
+    This means the disc whose album name contains "[Disc N]" acts as the anchor,
+    and the other disc (even without a disc suffix) gets matched by artist + album_base.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from backend.models import Job, JobMetadata
+    from backend.metadata.normalize import norm
+
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        if not job or job.album_group:
+            return  # Already grouped
+
+        meta = await session.get(JobMetadata, job_id)
+        if not meta:
+            return
+
+        our_album_base = meta.album_base or meta.album
+        our_artist = meta.artist
+        if not our_album_base or not our_artist:
+            return
+
+        our_artist_norm = norm(our_artist)
+        our_album_norm = norm(our_album_base)
+
+        # Find other recent ungrouped jobs (regardless of total_discs)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        result = await session.execute(
+            select(Job, JobMetadata)
+            .join(JobMetadata, Job.id == JobMetadata.job_id)
+            .where(
+                Job.id != job_id,
+                Job.album_group.is_(None),
+                Job.created_at >= cutoff,
+            )
+        )
+        candidates = result.all()
+
+        if not candidates:
+            return
+
+        # Match by normalized artist + album_base
+        matched_jobs: list[tuple[Job, JobMetadata]] = [(job, meta)]
+        for cand_job, cand_meta in candidates:
+            cand_album_base = cand_meta.album_base or cand_meta.album
+            cand_artist = cand_meta.artist
+            if not cand_album_base or not cand_artist:
+                continue
+            if norm(cand_artist) == our_artist_norm and norm(cand_album_base) == our_album_norm:
+                matched_jobs.append((cand_job, cand_meta))
+
+        if len(matched_jobs) < 2:
+            return  # No match found
+
+        # At least one job in the group must indicate multi-disc
+        # (total_discs > 1 or disc_number extracted from album name)
+        has_multi_disc_signal = any(
+            (m.total_discs and m.total_discs > 1) or (m.disc_number and m.disc_number > 1)
+            for _, m in matched_jobs
+        )
+        if not has_multi_disc_signal:
+            return  # Could be separate single-disc albums by same artist
+
+        # Create shared album_group
+        import uuid
+
+        group_id = str(uuid.uuid4())
+
+        # Sort by disc_number if available, else by creation time
+        matched_jobs.sort(
+            key=lambda jm: (jm[1].disc_number or 999, jm[0].created_at)
+        )
+
+        # Assign disc numbers sequentially for jobs that don't have one
+        used_numbers = {m.disc_number for _, m in matched_jobs if m.disc_number and m.disc_number > 0}
+        next_num = 1
+        for matched_job, matched_meta in matched_jobs:
+            matched_job.album_group = group_id
+            matched_meta.total_discs = len(matched_jobs)
+            if not matched_meta.disc_number or matched_meta.disc_number < 1:
+                while next_num in used_numbers:
+                    next_num += 1
+                matched_meta.disc_number = next_num
+                used_numbers.add(next_num)
+                next_num += 1
+
+        await session.commit()
+
+        job_ids = [j.id for j, _ in matched_jobs]
+        logger.info(
+            "Auto-matched album group %s for %d discs: %s (artist=%s, album=%s)",
+            group_id, len(matched_jobs), job_ids, our_artist, our_album_base,
+        )
+
+        await broadcast("job:group", {
+            "album_group": group_id,
+            "job_ids": job_ids,
+        })

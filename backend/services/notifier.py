@@ -215,7 +215,15 @@ async def schedule_eject_reminder(job_id: str, drive_id: str) -> None:
     async with async_session() as session:
         drive = await session.get(Drive, drive_id)
         if not drive or not drive.current_path:
-            return  # Drive disconnected or disc already ejected
+            return  # Drive disconnected
+
+        # Check actual disc status via ioctl, not just DB state
+        from backend.services.drive_monitor import get_tray_status, CDS_DISC_OK
+
+        tray_status = await asyncio.to_thread(get_tray_status, drive.current_path)
+        if tray_status != CDS_DISC_OK:
+            logger.debug("Disc already ejected from %s, skipping reminder", drive_id)
+            return
 
         job = await session.get(Job, job_id)
         meta = await session.execute(
