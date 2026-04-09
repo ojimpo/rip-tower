@@ -46,47 +46,59 @@ def get_tray_status(dev_path: str) -> int:
 
 
 def _get_drive_info(dev_path: str) -> dict | None:
-    """Get drive serial and model via udevadm or /sys fallback."""
+    """Get drive serial and model via /sys tree, udevadm, or fallback."""
     dev_name = Path(dev_path).name  # e.g. "sr0"
 
-    # Try udevadm first
     serial = None
     model = None
+
+    # 1. Walk /sys device tree to find USB serial (works inside Docker)
+    sys_device = Path(f"/sys/block/{dev_name}/device")
     try:
-        result = subprocess.run(
-            ["udevadm", "info", "--query=property", f"--name={dev_path}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if line.startswith("ID_SERIAL_SHORT="):
-                    serial = line.split("=", 1)[1].strip()
-                elif line.startswith("ID_SERIAL=") and not serial:
-                    serial = line.split("=", 1)[1].strip()
-                elif line.startswith("ID_MODEL="):
-                    model = line.split("=", 1)[1].strip().replace("_", " ")
+        real_path = sys_device.resolve()
+        p = real_path
+        while p != Path("/"):
+            serial_file = p / "serial"
+            if serial_file.exists():
+                serial = serial_file.read_text().strip()
+                break
+            p = p.parent
     except Exception:
         pass
 
-    # Fallback: read from /sys/block/
+    # Read model from /sys/block
+    try:
+        vendor = (sys_device / "vendor").read_text().strip() if (sys_device / "vendor").exists() else ""
+        model_sys = (sys_device / "model").read_text().strip() if (sys_device / "model").exists() else ""
+        if vendor or model_sys:
+            model = f"{vendor} {model_sys}".strip()
+    except Exception:
+        pass
+
+    # 2. Try udevadm (may provide better info on host)
     if not serial:
-        sys_path = Path(f"/sys/block/{dev_name}/device")
         try:
-            vendor = (sys_path / "vendor").read_text().strip() if (sys_path / "vendor").exists() else ""
-            model_sys = (sys_path / "model").read_text().strip() if (sys_path / "model").exists() else ""
-            # Use vendor+model as a stable identifier
-            if vendor or model_sys:
-                serial = f"{vendor}_{model_sys}_{dev_name}".replace(" ", "_")
-                model = model or f"{vendor} {model_sys}".strip()
+            result = subprocess.run(
+                ["udevadm", "info", "--query=property", f"--name={dev_path}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if line.startswith("ID_SERIAL_SHORT="):
+                        serial = line.split("=", 1)[1].strip()
+                    elif line.startswith("ID_SERIAL=") and not serial:
+                        serial = line.split("=", 1)[1].strip()
+                    elif line.startswith("ID_MODEL=") and not model:
+                        model = line.split("=", 1)[1].strip().replace("_", " ")
         except Exception:
             pass
 
+    # 3. Last resort: use device name (not stable across reconnects)
     if not serial:
-        # Last resort: use device name
         serial = dev_name
-        model = dev_name
+        model = model or dev_name
 
     return {"serial": serial, "model": model or serial[:20]}
 
@@ -110,6 +122,54 @@ def scan_drives() -> list[dict]:
                 "tray_open": tray_status == CDS_TRAY_OPEN,
             })
     return drives
+
+
+async def _migrate_legacy_drive(session, info: dict) -> "Drive | None":
+    """Migrate a drive from legacy fallback serial (vendor_model_srN) to real USB serial.
+
+    Returns the migrated Drive if found, None otherwise.
+    """
+    from backend.models import Drive, Job
+    from sqlalchemy import select, update
+
+    dev_name = Path(info["path"]).name  # e.g. "sr2"
+    legacy_suffix = f"_{dev_name}"
+
+    # Find legacy entry whose drive_id ends with _srN
+    result = await session.execute(
+        select(Drive).where(Drive.drive_id.endswith(legacy_suffix))
+    )
+    candidates = result.scalars().all()
+    if len(candidates) != 1:
+        # Ambiguous or none — skip migration
+        return None
+    legacy_drive = candidates[0]
+
+    old_id = legacy_drive.drive_id
+    new_id = info["serial"]
+
+    # Update jobs referencing the old drive_id
+    await session.execute(
+        update(Job).where(Job.drive_id == old_id).values(drive_id=new_id)
+    )
+
+    # Delete old entry and create new one (drive_id is PK, can't update)
+    name = legacy_drive.name
+    auto_rip = legacy_drive.auto_rip
+    auto_rip_source_type = legacy_drive.auto_rip_source_type
+    await session.delete(legacy_drive)
+    await session.flush()
+
+    new_drive = Drive(
+        drive_id=new_id,
+        name=name,
+        current_path=info["path"],
+        auto_rip=auto_rip,
+        auto_rip_source_type=auto_rip_source_type,
+    )
+    session.add(new_drive)
+    logger.info("Drive migrated: %s → %s (%s)", old_id, new_id, name)
+    return new_drive
 
 
 async def start_monitoring() -> None:
@@ -143,13 +203,16 @@ async def start_monitoring() -> None:
                 drive.current_path = info["path"]
                 logger.info("Drive reconnected: %s (%s) at %s", drive.name, drive.drive_id, info["path"])
             else:
-                drive = Drive(
-                    drive_id=info["serial"],
-                    name=info["model"] or info["serial"][:16],
-                    current_path=info["path"],
-                )
-                session.add(drive)
-                logger.info("New drive registered: %s at %s", info["serial"], info["path"])
+                # Check for legacy fallback serial to migrate
+                drive = await _migrate_legacy_drive(session, info)
+                if not drive:
+                    drive = Drive(
+                        drive_id=info["serial"],
+                        name=info["model"] or info["serial"][:16],
+                        current_path=info["path"],
+                    )
+                    session.add(drive)
+                    logger.info("New drive registered: %s at %s", info["serial"], info["path"])
 
             await broadcast("drive:connected", {
                 "drive_id": drive.drive_id,
@@ -237,13 +300,16 @@ async def _rescan_drives() -> None:
                 drive.current_path = info["path"]
                 logger.info("Drive reconnected: %s (%s) at %s", drive.name, drive.drive_id, info["path"])
             else:
-                drive = Drive(
-                    drive_id=info["serial"],
-                    name=info["model"] or info["serial"][:16],
-                    current_path=info["path"],
-                )
-                session.add(drive)
-                logger.info("New drive registered: %s at %s", info["serial"], info["path"])
+                # Check for legacy fallback serial to migrate
+                drive = await _migrate_legacy_drive(session, info)
+                if not drive:
+                    drive = Drive(
+                        drive_id=info["serial"],
+                        name=info["model"] or info["serial"][:16],
+                        current_path=info["path"],
+                    )
+                    session.add(drive)
+                    logger.info("New drive registered: %s at %s", info["serial"], info["path"])
 
             await broadcast("drive:connected", {
                 "drive_id": drive.drive_id,
@@ -288,6 +354,9 @@ async def _watch_hotplug() -> None:
 
 # Previous disc state per drive_id: True = disc present, False = no disc
 _prev_disc_state: dict[str, bool] = {}
+# Counter for periodic full rescan (every N poll cycles)
+_poll_cycle: int = 0
+_RESCAN_INTERVAL: int = 10  # Full rescan every 10 cycles (≈30 seconds)
 
 
 async def _auto_identify(drive, session) -> "DiscInfo | None":
@@ -339,11 +408,18 @@ async def _poll_disc_status() -> None:
     from backend.services.websocket import broadcast
     from sqlalchemy import select
 
-    global _prev_disc_state
+    global _prev_disc_state, _poll_cycle
 
     while True:
         await asyncio.sleep(3)
         try:
+            # Periodic full rescan to detect new/removed drives
+            # (udevadm monitor doesn't work reliably inside Docker)
+            _poll_cycle += 1
+            if _poll_cycle >= _RESCAN_INTERVAL:
+                _poll_cycle = 0
+                await _rescan_drives()
+
             async with async_session() as session:
                 result = await session.execute(
                     select(Drive).where(Drive.current_path.isnot(None))

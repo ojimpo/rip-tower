@@ -378,6 +378,65 @@ async def _embed_lyrics(flac_path: Path, lyrics: str, synced: bool = False) -> N
     await proc.communicate()
 
 
+async def update_kashidashi(job_id: str) -> None:
+    """Notify kashidashi that a matched item has been ripped (set ripped_at)."""
+    from datetime import datetime, timezone
+
+    import httpx
+
+    from backend.models import KashidashiCandidate, Job, JobMetadata
+
+    config = get_config()
+    base_url = config.integrations.kashidashi_url
+    if not base_url:
+        return
+
+    async with async_session() as session:
+        # Find matched kashidashi candidate for this job
+        result = await session.execute(
+            select(KashidashiCandidate).where(
+                KashidashiCandidate.job_id == job_id,
+                KashidashiCandidate.matched == True,
+            )
+        )
+        candidate = result.scalar_one_or_none()
+        if not candidate:
+            return
+
+        job = await session.get(Job, job_id)
+        meta_result = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job_id)
+        )
+        meta = meta_result.scalar_one_or_none()
+
+    ripped_at = datetime.now(timezone.utc)
+    if job and job.completed_at:
+        ripped_at = job.completed_at
+    ripped_iso = ripped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    patch_data = {
+        "ripped_at": ripped_iso,
+        "metadata_artist": meta.artist if meta else None,
+        "metadata_album": meta.album if meta else None,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.patch(
+                f"{base_url}/api/items/{candidate.item_id}",
+                json=patch_data,
+            )
+            resp.raise_for_status()
+        logger.info(
+            "Kashidashi ripped_at updated: item %d for job %s",
+            candidate.item_id, job_id,
+        )
+    except Exception:
+        logger.warning(
+            "Kashidashi update failed for item %d (non-critical)",
+            candidate.item_id, exc_info=True,
+        )
+
+
 async def _plex_refresh() -> None:
     """Trigger Plex library refresh (best-effort, with token auth).
 

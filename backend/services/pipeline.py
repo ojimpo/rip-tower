@@ -196,10 +196,11 @@ async def run_finalize(job_id: str) -> None:
     """Run the finalization step."""
     try:
         await _update_status(job_id, "finalizing")
-        from backend.services.finalizer import finalize
+        from backend.services.finalizer import finalize, update_kashidashi
 
         await finalize(job_id)
         await _update_status(job_id, "complete")
+        await update_kashidashi(job_id)
         await broadcast("job:complete", {"job_id": job_id})
 
         from backend.services.notifier import notify_complete
