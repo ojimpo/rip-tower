@@ -180,9 +180,13 @@ export default function Dashboard() {
 
       for (const drive of rippableDrives) {
         const discNumber = ripAllMultiDisc ? (ripAllDiscNumbers[drive.drive_id] ?? 1) : undefined;
+        const hints: Record<string, string> = {};
+        if (drive.disc_info?.artist) hints.artist = drive.disc_info.artist;
+        if (drive.disc_info?.album) hints.album = drive.disc_info.album;
         await api.startRip({
           drive_id: drive.drive_id,
           source_type: ripAllSourceType,
+          hints: Object.keys(hints).length > 0 ? hints : undefined,
           ...(ripAllMultiDisc && {
             album_group: albumGroup,
             disc_number: discNumber,
