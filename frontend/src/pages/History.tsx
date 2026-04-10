@@ -84,7 +84,7 @@ export default function History() {
   return (
     <div>
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
         <div className="flex items-center justify-between px-4 py-3">
           <h1 className="text-lg font-bold tracking-tight">History</h1>
         </div>

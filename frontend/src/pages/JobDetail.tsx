@@ -215,7 +215,7 @@ export default function JobDetail() {
   return (
     <div className="pb-8">
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
         <div className="flex items-center gap-3 px-4 py-3">
           <Link
             to="/"
@@ -238,7 +238,7 @@ export default function JobDetail() {
       </header>
 
       {/* Tabs */}
-      <div className="sticky top-[57px] z-40 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <div className="sticky z-40 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5" style={{ top: "calc(57px + env(safe-area-inset-top, 0px))" }}>
         <div className="flex">
           {tabs.map((t) => (
             <button

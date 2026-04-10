@@ -101,7 +101,7 @@ export default function Import() {
   if (result) {
     return (
       <div>
-        <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+        <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
           <div className="flex items-center gap-3 px-4 py-3">
             <Link to="/" className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition">
               <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -133,7 +133,7 @@ export default function Import() {
   return (
     <div>
       {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5">
+      <header className="sticky top-0 z-50 backdrop-blur-xl bg-[#0f0f1a]/80 border-b border-white/5" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
         <div className="flex items-center gap-3 px-4 py-3">
           <Link to="/" className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-white/10 transition">
             <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
