@@ -74,7 +74,7 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                 )).scalar() or 0
                 disc_info = {
                     "artist": meta.artist if meta else None,
-                    "album": meta.album if meta else None,
+                    "album": (meta.album_base or meta.album) if meta else None,
                     "track_count": track_count,
                 }
 

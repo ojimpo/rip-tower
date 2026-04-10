@@ -67,7 +67,7 @@ async def get_history(
         items.append({
             "job_id": job.id,
             "artist": meta.artist if meta else None,
-            "album": meta.album if meta else None,
+            "album": (meta.album_base or meta.album) if meta else None,
             "source_type": job.source_type,
             "completed_at": job.completed_at.replace(tzinfo=timezone.utc).isoformat() if job.completed_at else None,
             "track_count": track_count or None,

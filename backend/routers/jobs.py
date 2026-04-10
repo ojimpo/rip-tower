@@ -202,7 +202,7 @@ async def list_jobs(
             "job_id": job.id,
             "status": job.status,
             "artist": meta.artist if meta else None,
-            "album": meta.album if meta else None,
+            "album": (meta.album_base or meta.album) if meta else None,
             "drive_name": drive_name,
             "track_count": track_count or None,
             "current_track": current_track,
@@ -267,7 +267,7 @@ async def get_job(
         },
         "metadata": {
             "artist": meta.artist,
-            "album": meta.album,
+            "album": meta.album_base or meta.album,
             "album_base": meta.album_base,
             "year": meta.year,
             "genre": meta.genre,
@@ -373,6 +373,15 @@ async def update_metadata(
         raise HTTPException(status_code=404, detail="Metadata not found")
 
     updates = request.model_dump(exclude_unset=True)
+
+    # Recalculate album_base when album is edited
+    if "album" in updates and updates["album"]:
+        from backend.metadata.normalize import extract_disc_info
+        base, disc_num = extract_disc_info(updates["album"])
+        updates["album_base"] = base
+        if disc_num is not None:
+            updates["disc_number"] = disc_num
+
     for field, value in updates.items():
         setattr(meta, field, value)
 
@@ -944,7 +953,7 @@ async def get_group(
             "job_id": job.id,
             "status": job.status,
             "artist": meta.artist if meta else None,
-            "album": meta.album if meta else None,
+            "album": (meta.album_base or meta.album) if meta else None,
             "disc_number": meta.disc_number if meta else None,
             "total_discs": meta.total_discs if meta else None,
         })
