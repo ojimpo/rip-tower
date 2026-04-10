@@ -67,7 +67,7 @@ Rip Tower はこれらを解決する専用 WebUI アプリとして設計した
 ### 起動
 
 ```bash
-git clone https://github.com/kouki-ojima/rip-tower.git
+git clone https://github.com/ojimpo/rip-tower.git
 cd rip-tower
 
 # フロントエンドビルド（初回のみ）
