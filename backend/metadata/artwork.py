@@ -16,6 +16,7 @@ from PIL import Image
 
 from backend.config import DATA_DIR, get_config
 from backend.database import async_session
+from backend.metadata.normalize import similarity
 from backend.models import Artwork, JobMetadata, MetadataCandidate
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,8 @@ async def _fetch_itunes_artwork(
     """Fetch artwork from iTunes Search API or a known URL."""
     url = known_url
     if not url:
-        # Search iTunes for the artwork
+        # Search iTunes for the artwork — fetch multiple results and pick the
+        # one that actually matches the artist/album to avoid irrelevant covers.
         term = f"{artist} {album}"
         async with httpx.AsyncClient(timeout=10) as client:
             try:
@@ -121,15 +123,24 @@ async def _fetch_itunes_artwork(
                     "term": term,
                     "media": "music",
                     "entity": "album",
-                    "limit": 1,
+                    "limit": 10,
                     "country": "JP",
                 })
                 if resp.status_code == 200:
                     data = resp.json()
-                    results = data.get("results", [])
-                    if results:
-                        url = (results[0].get("artworkUrl100") or "").replace(
-                            "100x100", "600x600"
+                    for r in data.get("results", []):
+                        r_artist = r.get("artistName", "")
+                        r_album = r.get("collectionName", "")
+                        if (similarity(artist, r_artist) >= 0.6
+                                and similarity(album, r_album) >= 0.6):
+                            url = (r.get("artworkUrl100") or "").replace(
+                                "100x100", "600x600"
+                            )
+                            break
+                    if not url:
+                        logger.debug(
+                            "iTunes artwork: no matching result for '%s' / '%s'",
+                            artist, album,
                         )
             except Exception:
                 logger.exception("iTunes artwork search failed")
@@ -175,8 +186,23 @@ async def _fetch_discogs_artwork(job_id: str, artist: str, album: str) -> None:
             if not results:
                 return
 
-            cover_url = results[0].get("cover_image") or results[0].get("thumb")
+            # Find the first result that actually matches artist/album
+            cover_url = None
+            for r in results:
+                r_title = r.get("title", "")  # "Artist - Album" format
+                parts = r_title.split(" - ", 1)
+                r_artist = parts[0] if parts else ""
+                r_album = parts[1] if len(parts) > 1 else ""
+                if (similarity(artist, r_artist) >= 0.6
+                        and similarity(album, r_album) >= 0.6):
+                    cover_url = r.get("cover_image") or r.get("thumb")
+                    break
+
             if not cover_url:
+                logger.debug(
+                    "Discogs artwork: no matching result for '%s' / '%s'",
+                    artist, album,
+                )
                 return
 
         except Exception:
