@@ -133,6 +133,8 @@ export interface JobSummary {
   updated_at: string;
   error_message: string | null;
   artwork_url: string | null;
+  disc_number: number | null;
+  total_discs: number | null;
 }
 
 export interface HistoryItem {
@@ -143,6 +145,8 @@ export interface HistoryItem {
   completed_at: string | null;
   track_count: number | null;
   artwork_url: string | null;
+  disc_number: number | null;
+  total_discs: number | null;
   kashidashi_id: string | null;
 }
 

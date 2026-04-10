@@ -285,13 +285,18 @@ export default function JobDetail() {
                   inputClassName="text-base font-bold w-full"
                   onSave={(v) => updateMetadataMutation.mutate({ artist: v })}
                 />
-                <EditableField
-                  value={metadata?.album || ""}
-                  placeholder="Album"
-                  className="text-sm text-gray-300 truncate mt-0.5 block"
-                  inputClassName="text-sm w-full"
-                  onSave={(v) => updateMetadataMutation.mutate({ album: v })}
-                />
+                <span className="flex items-center gap-1.5 mt-0.5">
+                  <EditableField
+                    value={metadata?.album || ""}
+                    placeholder="Album"
+                    className="text-sm text-gray-300 truncate block"
+                    inputClassName="text-sm w-full"
+                    onSave={(v) => updateMetadataMutation.mutate({ album: v })}
+                  />
+                  {metadata && metadata.total_discs > 1 && (
+                    <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-400 border border-white/10">Disc {metadata.disc_number}/{metadata.total_discs}</span>
+                  )}
+                </span>
                 <div className="flex items-center gap-2 mt-2">
                   <EditableField
                     value={metadata?.year?.toString() || ""}

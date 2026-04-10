@@ -72,6 +72,8 @@ async def get_history(
             "completed_at": job.completed_at.replace(tzinfo=timezone.utc).isoformat() if job.completed_at else None,
             "track_count": track_count or None,
             "artwork_url": None,
+            "disc_number": meta.disc_number if meta else None,
+            "total_discs": meta.total_discs if meta else None,
             "kashidashi_id": str(kashi.item_id) if kashi else None,
         })
 

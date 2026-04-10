@@ -215,6 +215,8 @@ async def list_jobs(
             "updated_at": _utc_iso(job.updated_at),
             "error_message": job.error_message,
             "artwork_url": None,  # TODO: add artwork thumbnail
+            "disc_number": meta.disc_number if meta else None,
+            "total_discs": meta.total_discs if meta else None,
         })
 
     return {"jobs": summaries}

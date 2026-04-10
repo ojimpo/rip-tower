@@ -317,7 +317,7 @@ export default function Dashboard() {
                     {job.status === "error" && job.drive_name
                       ? `${job.drive_name}: ${job.error_message || "Error"}`
                       : job.artist && job.album
-                        ? `${job.artist} / ${job.album}`
+                        ? <>{job.artist} / {job.album}{job.total_discs != null && job.total_discs > 1 && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}</>
                         : `Job ${job.job_id.slice(0, 8)}`}
                   </p>
                   <p className={`text-xs mt-0.5 ${job.status === "error" ? "text-red-400/70" : "text-amber-400/70"}`}>
@@ -406,7 +406,7 @@ export default function Dashboard() {
                     </div>
                     <p className="text-sm font-medium mt-0.5 truncate">
                       {job.artist && job.album
-                        ? `${job.artist} / ${job.album}`
+                        ? <>{job.artist} / {job.album}{job.total_discs != null && job.total_discs > 1 && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}</>
                         : `Job ${job.job_id.slice(0, 8)}`}
                     </p>
                   </div>
