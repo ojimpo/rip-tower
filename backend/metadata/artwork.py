@@ -17,7 +17,7 @@ from PIL import Image
 from backend.config import DATA_DIR, get_config
 from backend.database import async_session
 from backend.metadata.normalize import similarity
-from backend.models import Artwork, JobMetadata, MetadataCandidate
+from backend.models import Artwork, Job, JobMetadata, MetadataCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,11 @@ async def fetch_artwork(job_id: str) -> None:
     Saves images locally and creates Artwork records.
     """
     ARTWORK_DIR.mkdir(parents=True, exist_ok=True)
+
+    # If this job belongs to an album_group, copy artwork from a sibling
+    # that already has one (e.g. disc 1 resolved before disc 2).
+    if await _copy_from_group_sibling(job_id):
+        return
 
     # Load job metadata to know what we're looking for
     async with async_session() as session:
@@ -80,6 +85,66 @@ async def _find_itunes_artwork_url(job_id: str) -> str | None:
                 except (json.JSONDecodeError, TypeError):
                     pass
     return None
+
+
+async def _copy_from_group_sibling(job_id: str) -> bool:
+    """Copy artwork from an album_group sibling that already has one.
+
+    For multi-disc albums, the first disc to resolve fetches artwork normally.
+    Subsequent discs reuse the same artwork file instead of searching again.
+
+    Returns True if artwork was copied (caller can skip external fetches).
+    """
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        if not job or not job.album_group:
+            return False
+
+        # Find selected artwork from any sibling in the same group
+        result = await session.execute(
+            select(Artwork)
+            .join(Job, Job.id == Artwork.job_id)
+            .where(
+                Job.album_group == job.album_group,
+                Job.id != job_id,
+                Artwork.selected.is_(True),
+            )
+            .limit(1)
+        )
+        sibling_art = result.scalars().first()
+        if not sibling_art or not sibling_art.local_path:
+            return False
+
+        # Copy the image file
+        src = Path(sibling_art.local_path)
+        if not src.exists():
+            return False
+
+        ext = src.suffix
+        filename = f"{job_id}_group{ext}"
+        dest = ARTWORK_DIR / filename
+        dest.write_bytes(src.read_bytes())
+
+        artwork = Artwork(
+            job_id=job_id,
+            source=sibling_art.source,
+            url=sibling_art.url,
+            local_path=str(dest),
+            width=sibling_art.width,
+            height=sibling_art.height,
+            file_size=sibling_art.file_size,
+            selected=True,
+        )
+        session.add(artwork)
+        await session.commit()
+
+    logger.info(
+        "Copied artwork for job %s from group sibling %s",
+        job_id, sibling_art.job_id,
+    )
+    return True
 
 
 async def _fetch_cover_art_archive(job_id: str, source_url: str | None) -> None:
