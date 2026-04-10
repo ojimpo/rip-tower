@@ -15,6 +15,7 @@ export interface Drive {
   auto_rip: boolean;
   auto_rip_source_type: string;
   active_job_id: string | null;
+  active_job_status: string | null;
 }
 
 export interface Job {

@@ -107,6 +107,7 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
             "auto_rip": drive.auto_rip,
             "auto_rip_source_type": drive.auto_rip_source_type,
             "active_job_id": active_job_for_drive.id if active_job_for_drive else None,
+            "active_job_status": active_job_for_drive.status if active_job_for_drive else None,
         })
 
     return items
