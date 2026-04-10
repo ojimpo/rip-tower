@@ -160,9 +160,9 @@ export default function History() {
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {item.artist || "Unknown"} / {item.album || "Unknown"}
-                      {item.total_discs != null && item.total_discs > 1 && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {item.disc_number}/{item.total_discs}</span>}
+                    <p className="flex items-center min-w-0 text-sm font-medium">
+                      <span className="truncate">{item.artist || "Unknown"} / {item.album || "Unknown"}</span>
+                      {item.total_discs != null && item.total_discs > 1 && <span className="shrink-0 ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {item.disc_number}/{item.total_discs}</span>}
                     </p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       {sourceTypeBadge(item)}

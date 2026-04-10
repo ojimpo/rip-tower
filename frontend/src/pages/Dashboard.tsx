@@ -313,12 +313,13 @@ export default function Dashboard() {
                   )}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${job.status === "error" ? "text-red-300" : "text-amber-200"}`}>
-                    {job.status === "error" && job.drive_name
+                  <p className={`flex items-center min-w-0 text-sm font-medium ${job.status === "error" ? "text-red-300" : "text-amber-200"}`}>
+                    <span className="truncate">{job.status === "error" && job.drive_name
                       ? `${job.drive_name}: ${job.error_message || "Error"}`
                       : job.artist && job.album
-                        ? <>{job.artist} / {job.album}{job.total_discs != null && job.total_discs > 1 && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}</>
-                        : `Job ${job.job_id.slice(0, 8)}`}
+                        ? `${job.artist} / ${job.album}`
+                        : `Job ${job.job_id.slice(0, 8)}`}</span>
+                    {job.total_discs != null && job.total_discs > 1 && <span className="shrink-0 ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}
                   </p>
                   <p className={`text-xs mt-0.5 ${job.status === "error" ? "text-red-400/70" : "text-amber-400/70"}`}>
                     {job.status === "review" ? "Review\u5F85\u3061" : job.status}{" "}
@@ -404,10 +405,11 @@ export default function Dashboard() {
                         <span className="text-xs text-gray-500">{job.drive_name}</span>
                       )}
                     </div>
-                    <p className="text-sm font-medium mt-0.5 truncate">
-                      {job.artist && job.album
-                        ? <>{job.artist} / {job.album}{job.total_discs != null && job.total_discs > 1 && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}</>
-                        : `Job ${job.job_id.slice(0, 8)}`}
+                    <p className="flex items-center min-w-0 text-sm font-medium mt-0.5">
+                      <span className="truncate">{job.artist && job.album
+                        ? `${job.artist} / ${job.album}`
+                        : `Job ${job.job_id.slice(0, 8)}`}</span>
+                      {job.total_discs != null && job.total_discs > 1 && <span className="shrink-0 ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-gray-300">Disc {job.disc_number}/{job.total_discs}</span>}
                     </p>
                   </div>
                   {job.tracks_done != null && job.track_count && !showTrackProgress && (
