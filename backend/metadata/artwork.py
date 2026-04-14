@@ -34,7 +34,7 @@ async def fetch_artwork(job_id: str) -> None:
 
     # If this job belongs to an album_group, copy artwork from a sibling
     # that already has one (e.g. disc 1 resolved before disc 2).
-    if await _copy_from_group_sibling(job_id):
+    if await copy_from_group_sibling(job_id):
         return
 
     # Load job metadata to know what we're looking for
@@ -87,7 +87,7 @@ async def _find_itunes_artwork_url(job_id: str) -> str | None:
     return None
 
 
-async def _copy_from_group_sibling(job_id: str) -> bool:
+async def copy_from_group_sibling(job_id: str) -> bool:
     """Copy artwork from an album_group sibling that already has one.
 
     For multi-disc albums, the first disc to resolve fetches artwork normally.
@@ -100,6 +100,15 @@ async def _copy_from_group_sibling(job_id: str) -> bool:
     async with async_session() as session:
         job = await session.get(Job, job_id)
         if not job or not job.album_group:
+            return False
+
+        # Skip if this job already has a selected artwork
+        existing = await session.execute(
+            select(Artwork).where(
+                Artwork.job_id == job_id, Artwork.selected.is_(True)
+            ).limit(1)
+        )
+        if existing.scalars().first():
             return False
 
         # Find selected artwork from any sibling in the same group

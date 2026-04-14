@@ -914,6 +914,11 @@ async def add_to_group(
 
     job.album_group = group_id
     await session.commit()
+
+    # Copy artwork from group sibling if this job has none selected
+    from backend.metadata.artwork import copy_from_group_sibling
+    await copy_from_group_sibling(job_id)
+
     return {"status": "added", "album_group": group_id}
 
 
