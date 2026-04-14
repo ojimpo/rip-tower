@@ -222,7 +222,7 @@ export default function Dashboard() {
   };
 
   const handleEjectAll = () => {
-    const safeDrives = (drives ?? []).filter((d) => d.current_path && !d.active_job_id);
+    const safeDrives = (drives ?? []).filter((d) => d.current_path && d.has_disc && !d.active_job_id);
     for (const drive of safeDrives) {
       handleEject(drive.drive_id);
     }
