@@ -118,7 +118,11 @@ class KashidashiSource(MetadataSource):
                 except ValueError:
                     pass
 
-            if score > 0:
+            # Require at least one real signal (artist/album/track_count/catalog).
+            # Recency alone (score 1) is not evidence that this disc is that item —
+            # it just means the user borrowed it recently, which would flood the
+            # candidate pool with unrelated recent borrows when no real source hits.
+            if score >= 2:
                 candidates.append({
                     "artist": it.get("metadata_artist") or it.get("artist", ""),
                     "album": it.get("metadata_album") or it.get("title", ""),

@@ -87,6 +87,27 @@ async def maybe_assist(job_id: str) -> bool:
     if not candidates:
         return False
 
+    # Safeguard: if no candidate has real evidence (top confidence < 20),
+    # don't call LLM — it has no basis to answer and tends to justify whatever
+    # weak hint is present, producing confident-looking wrong metadata.
+    # Flag as unknown_disc so the review UI shows the disc needs manual identification.
+    top_confidence = max((c.confidence or 0) for c in candidates)
+    if top_confidence < 20:
+        logger.info(
+            "LLM assist skipped for job %s: no solid evidence (top confidence=%d)",
+            job_id, top_confidence,
+        )
+        async with async_session() as session:
+            m = await session.get(JobMetadata, job_id)
+            if m:
+                existing = json.loads(m.issues) if m.issues else []
+                if "unknown_disc" not in existing:
+                    existing.append("unknown_disc")
+                    m.issues = json.dumps(existing, ensure_ascii=False)
+                    m.needs_review = True
+                    await session.commit()
+        return False
+
     # Build prompt
     prompt = _build_prompt(meta, candidates, trigger_issues)
 
