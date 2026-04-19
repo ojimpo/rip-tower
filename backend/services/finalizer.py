@@ -9,6 +9,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import httpx
 from sqlalchemy import select
 
 from backend.config import get_config
@@ -438,40 +439,23 @@ async def update_kashidashi(job_id: str) -> None:
 
 
 async def _plex_refresh() -> None:
-    """Trigger Plex library refresh (best-effort, with token auth).
-
-    Extracts Plex token from the Plex container, then calls the refresh API.
-    Matches original finalizer.py behavior.
-    """
+    """Trigger Plex library refresh via HTTP API."""
     config = get_config()
+    plex_url = config.integrations.plex_url
+    token = config.integrations.plex_token
     section_id = config.integrations.plex_section_id
-    if not section_id:
+
+    if not (plex_url and token and section_id):
+        logger.debug("Plex not configured (url/token/section_id), skipping refresh")
         return
 
+    url = f"{plex_url.rstrip('/')}/library/sections/{section_id}/refresh"
     try:
-        # Extract Plex token from container
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "exec", "plex", "sh", "-lc",
-            'grep -o \'PlexOnlineToken="[^"]*"\' '
-            '"/config/Library/Application Support/Plex Media Server/Preferences.xml" '
-            "| head -n1 | cut -d'\"' -f2",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-        token = stdout.decode().strip()
-
-        if token:
-            proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                f"http://127.0.0.1:32400/library/sections/{section_id}/refresh"
-                f"?X-Plex-Token={token}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(proc.communicate(), timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers={"X-Plex-Token": token})
+        if resp.status_code == 200:
             logger.info("Plex refresh triggered for section %s", section_id)
         else:
-            logger.debug("Could not extract Plex token, skipping refresh")
+            logger.warning("Plex refresh returned HTTP %s", resp.status_code)
     except Exception:
-        logger.debug("Plex refresh failed (non-critical)", exc_info=True)
+        logger.warning("Plex refresh failed (non-critical)", exc_info=True)

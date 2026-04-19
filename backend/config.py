@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
         "discogs_token": "",
         "musixmatch_token": "",
         "plex_url": "",
+        "plex_token": "",
         "plex_section_id": None,
         "llm_api_key": "",
         "llm_model": "haiku",
@@ -64,6 +65,7 @@ class IntegrationsConfig(BaseModel):
     discogs_token: str = ""
     musixmatch_token: str = ""
     plex_url: str = ""
+    plex_token: str = ""
     plex_section_id: Optional[int] = None
     llm_api_key: str = ""
     llm_model: str = "haiku"

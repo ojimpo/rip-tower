@@ -6,7 +6,7 @@ import type { Drive, TrashResponse } from "../lib/types";
 interface AppConfig {
   general: { auto_approve_threshold: number; reminder_initial_hours: number; reminder_interval_hours: number; base_url: string };
   output: { format: string; quality: number; music_dir: string; incoming_dir: string; folder_template: string; file_template: string };
-  integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string };
+  integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_token: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string };
 }
 
 const SOURCE_TYPES = [
@@ -338,6 +338,15 @@ export default function Settings() {
                     type="number"
                     value={cfg.integrations.plex_section_id ?? ""}
                     onChange={(e) => updateConfig((c) => ({ ...c, integrations: { ...c.integrations, plex_section_id: e.target.value ? +e.target.value : null } }))}
+                    className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] text-gray-500 block mb-1">Token (X-Plex-Token)</label>
+                  <input
+                    type="password"
+                    value={cfg.integrations.plex_token}
+                    onChange={(e) => updateConfig((c) => ({ ...c, integrations: { ...c.integrations, plex_token: e.target.value } }))}
                     className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
                   />
                 </div>
