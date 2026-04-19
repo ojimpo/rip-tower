@@ -134,7 +134,7 @@ def _build_encode_cmd(
 ) -> list[str] | None:
     """Build the encoding command for the given format."""
     if fmt == "flac":
-        return ["flac", f"-{quality}", "-o", str(output_path), str(wav_path)]
+        return ["flac", "-f", f"-{quality}", "-o", str(output_path), str(wav_path)]
     elif fmt == "alac":
         return [
             "ffmpeg", "-y", "-i", str(wav_path),
