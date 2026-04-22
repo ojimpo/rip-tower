@@ -65,6 +65,48 @@ async def encode_all(job_id: str) -> None:
         await _encode_track(job_id, track, meta, fmt, quality, ext)
 
 
+async def retag_all(job_id: str) -> bool:
+    """Re-apply tags to already-encoded files without re-encoding.
+
+    Returns True if every track was retagged in place. Returns False if any
+    track's encoded file is missing or the output format isn't FLAC — the
+    caller should fall back to encode_all() in that case.
+    """
+    config = get_config()
+    if config.output.format != "flac":
+        return False
+
+    async with async_session() as session:
+        tracks = await session.execute(
+            select(Track)
+            .where(Track.job_id == job_id, Track.rip_status.in_(["ok", "ok_degraded"]))
+            .order_by(Track.track_num)
+        )
+        tracks = tracks.scalars().all()
+
+        meta = await session.execute(
+            select(JobMetadata).where(JobMetadata.job_id == job_id)
+        )
+        meta = meta.scalar_one_or_none()
+
+    if not meta:
+        return False
+
+    for track in tracks:
+        if not track.encoded_path:
+            return False
+        path = Path(track.encoded_path)
+        if not path.exists() or path.suffix != ".flac":
+            return False
+
+    for track in tracks:
+        path = Path(track.encoded_path)
+        await _tag_flac(path, track, meta)
+        logger.info("Retagged track %d (%s)", track.track_num, path.name)
+
+    return True
+
+
 async def _encode_track(
     job_id: str,
     track,
