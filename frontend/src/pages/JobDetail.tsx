@@ -1,4 +1,4 @@
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useJob } from "../hooks/useJob";
@@ -24,7 +24,9 @@ export default function JobDetail() {
   const [wavTrack, setWavTrack] = useState<number | null>(null);
   const [groupSectionOpen, setGroupSectionOpen] = useState(false);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   useWebSocket();
@@ -185,6 +187,14 @@ export default function JobDetail() {
     },
   });
 
+  const deleteJobMutation = useMutation({
+    mutationFn: () => api.deleteJob(jobId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      navigate("/");
+    },
+  });
+
   if (isLoading) return <div className="p-4 text-gray-400">{"\u8AAD\u307F\u8FBC\u307F\u4E2D"}...</div>;
   if (error) return <div className="p-4 text-red-400">{"\u30A8\u30E9\u30FC"}: {(error as Error).message}</div>;
   if (!data) return null;
@@ -234,6 +244,17 @@ export default function JobDetail() {
           <span className={`text-xs font-medium px-2 py-1 rounded-full ${statusBadgeColor()}`}>
             {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
           </span>
+          {(job.status === "error" || job.status === "complete") && (
+            <button
+              onClick={() => setDeleteDialogOpen(true)}
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition text-gray-400 hover:text-red-400"
+              title={"ジョブを削除"}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          )}
         </div>
       </header>
 
@@ -1041,6 +1062,51 @@ export default function JobDetail() {
           >
             {reMatchKashidashiMutation.isPending ? "\u691C\u7D22\u4E2D..." : "\u73FE\u5728\u306E\u30E1\u30BF\u30C7\u30FC\u30BF\u3067\u518D\u691C\u7D22"}
           </button>
+        </div>
+      )}
+      {/* Delete Confirmation Dialog */}
+      {deleteDialogOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => !deleteJobMutation.isPending && setDeleteDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-md bg-[#16213e] rounded-t-2xl sm:rounded-2xl border border-white/10 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-base font-bold text-red-300">{"ジョブを削除"}</h3>
+              <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+                {metadata?.artist && metadata?.album
+                  ? `${metadata.artist} / ${metadata.album}`
+                  : `Job ${job.id.slice(0, 8)}`}
+                {"を削除します。"}
+                <br />
+                {"incoming の作業ファイルも削除されます（ライブラリに出力済みのファイルは残ります）。"}
+              </p>
+            </div>
+            {deleteJobMutation.isError && (
+              <p className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+                {(deleteJobMutation.error as Error).message}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setDeleteDialogOpen(false)}
+                disabled={deleteJobMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-sm text-gray-300 hover:bg-white/10 transition disabled:opacity-50"
+              >
+                {"キャンセル"}
+              </button>
+              <button
+                onClick={() => deleteJobMutation.mutate()}
+                disabled={deleteJobMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-bold text-white transition disabled:opacity-50"
+              >
+                {deleteJobMutation.isPending ? "削除中..." : "削除"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
