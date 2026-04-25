@@ -393,14 +393,18 @@ async def update_kashidashi(job_id: str) -> None:
         return
 
     async with async_session() as session:
-        # Find matched kashidashi candidate for this job
+        # Find matched kashidashi candidate for this job. Re-resolves can leave
+        # stale matched rows behind, so pick the most recent and tolerate
+        # duplicates rather than crashing the finalize tail.
         result = await session.execute(
-            select(KashidashiCandidate).where(
+            select(KashidashiCandidate)
+            .where(
                 KashidashiCandidate.job_id == job_id,
                 KashidashiCandidate.matched == True,
             )
+            .order_by(KashidashiCandidate.id.desc())
         )
-        candidate = result.scalar_one_or_none()
+        candidate = result.scalars().first()
         if not candidate:
             return
 

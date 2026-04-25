@@ -239,6 +239,12 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
     is_unique_match = len(tied) == 1
 
     async with async_session() as session:
+        from sqlalchemy import delete
+        # Clear prior candidates from earlier resolves so re-resolves don't
+        # accumulate stale (and duplicate matched) rows.
+        await session.execute(
+            delete(KashidashiCandidate).where(KashidashiCandidate.job_id == job_id)
+        )
         for score, it in scored[:5]:  # Save top 5 candidates
             candidate = KashidashiCandidate(
                 job_id=job_id,

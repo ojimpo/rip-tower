@@ -52,6 +52,15 @@ async def resolve(
         await _apply_forced(job_id, force)
         return
 
+    # Clear any candidates from a prior resolve so re-resolves don't accumulate
+    # stale rows (which would skew sanitizer ranking and contradiction checks).
+    async with async_session() as session:
+        from sqlalchemy import delete
+        await session.execute(
+            delete(MetadataCandidate).where(MetadataCandidate.job_id == job_id)
+        )
+        await session.commit()
+
     # Query all sources in parallel
     tasks = [
         asyncio.create_task(
