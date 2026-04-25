@@ -130,6 +130,32 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         issues.append("no_track_titles")
     elif all(re.match(r"^Track\s*\d+$", t, re.IGNORECASE) for t in track_titles):
         issues.append("no_track_titles")
+    elif all(t and re.match(r"^\d{1,4}$", t.strip()) for t in track_titles):
+        # GnuDB unsubmitted-disc placeholder pattern: pure digits like "101","102",...
+        # ("Track 1" handled above). Common multi-disc form is {disc}{track:02d}, so try
+        # to recover disc_number from a consistent leading digit when source didn't supply one.
+        issues.append("no_track_titles")
+        if not disc_number:
+            stripped = [t.strip() for t in track_titles]
+            leads = {t[0] for t in stripped if len(t) >= 3}
+            if len(leads) == 1 and stripped[0].startswith(next(iter(leads))):
+                try:
+                    inferred = int(next(iter(leads)))
+                    if 1 <= inferred <= 9:
+                        disc_number = inferred
+                        if not source_total_discs and not inferred_total_discs:
+                            inferred_total_discs = max(inferred, 2)
+                except ValueError:
+                    pass
+        # Drop the placeholder titles so we don't surface them in the review UI;
+        # LLM (if available) will repopulate via the second sanitize pass, otherwise
+        # tracks stay blank. Explicitly mark for DB clear so existing rows get reset
+        # too (re-resolve case where placeholders were previously written).
+        track_titles = []
+        track_artists = []
+        clear_placeholder_titles = True
+    else:
+        clear_placeholder_titles = False
 
     # Mojibake detection
     for text in [artist, album] + track_titles:
@@ -247,6 +273,18 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
                     track.title = track_titles[idx]
                 if is_compilation and idx < len(track_artists):
                     track.artist = track_artists[idx]
+        elif clear_placeholder_titles:
+            # Placeholder titles like "101","102" were previously written into
+            # tracks.title — clear them so the review UI shows blanks instead
+            # of misleading numbers when no real titles are available.
+            tracks = await session.execute(
+                select(Track)
+                .where(Track.job_id == job_id)
+                .order_by(Track.track_num)
+            )
+            for track in tracks.scalars():
+                if track.title and re.match(r"^\d{1,4}$", track.title.strip()):
+                    track.title = None
 
         await session.commit()
 

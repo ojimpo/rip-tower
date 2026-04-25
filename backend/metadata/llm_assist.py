@@ -13,11 +13,11 @@ import logging
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.config import get_config
 from backend.database import async_session
-from backend.models import JobMetadata, MetadataCandidate
+from backend.models import JobMetadata, MetadataCandidate, Track
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ async def maybe_assist(job_id: str) -> bool:
         "LLM assist triggered for job %s: issues=%s", job_id, trigger_issues
     )
 
-    # Load all candidates for context
+    # Load all candidates and track count for context
     async with async_session() as session:
         result = await session.execute(
             select(MetadataCandidate)
@@ -83,6 +83,10 @@ async def maybe_assist(job_id: str) -> bool:
             .order_by(MetadataCandidate.confidence.desc())
         )
         candidates = list(result.scalars().all())
+        track_count_result = await session.execute(
+            select(func.count(Track.id)).where(Track.job_id == job_id)
+        )
+        track_count = track_count_result.scalar() or 0
 
     if not candidates:
         return False
@@ -109,7 +113,7 @@ async def maybe_assist(job_id: str) -> bool:
         return False
 
     # Build prompt
-    prompt = _build_prompt(meta, candidates, trigger_issues)
+    prompt = _build_prompt(meta, candidates, trigger_issues, track_count)
 
     # Call Claude API
     model_name = config.integrations.llm_model or "haiku"
@@ -160,6 +164,7 @@ def _build_prompt(
     meta: JobMetadata,
     candidates: list[MetadataCandidate],
     issues: set[str],
+    track_count: int,
 ) -> str:
     """Build the prompt for Claude with all candidate data and issues."""
     candidate_lines = []
@@ -177,13 +182,20 @@ def _build_prompt(
     candidates_text = "\n".join(candidate_lines)
     issues_text = ", ".join(sorted(issues))
 
+    disc_line = ""
+    if meta.total_discs and meta.total_discs > 1:
+        disc_line = f"\n- Disc: {meta.disc_number or '?'} of {meta.total_discs}"
+    elif meta.disc_number and meta.disc_number > 1:
+        disc_line = f"\n- Disc: {meta.disc_number}"
+
     return f"""You are a music metadata specialist. Analyze the following CD metadata candidates and fix issues.
 
 ## Current best metadata
 - Artist: {meta.artist}
 - Album: {meta.album}
 - Year: {meta.year}
-- Genre: {meta.genre}
+- Genre: {meta.genre}{disc_line}
+- Track count on this disc: {track_count}
 
 ## Issues detected
 {issues_text}
@@ -195,7 +207,7 @@ def _build_prompt(
 Based on all the evidence, provide corrected metadata. Common fixes needed:
 - "mojibake": The text has encoding corruption (e.g., Shift_JIS misread as UTF-8). Determine the correct Japanese/English text.
 - "artist_variant": The artist name is in katakana but might be a well-known English artist. Provide the canonical name.
-- "no_track_titles": Try to determine correct track titles from the available data.
+- "no_track_titles": Track titles are missing or are placeholders (e.g. "Track 1", "101", "201"). If the artist + album are well-known and you are confident about the official tracklist for THIS specific disc (matching the track count above, and the disc number for multi-disc sets), provide it. Otherwise omit track_titles.
 - "artist_contradiction" / "album_contradiction": Multiple sources disagree. Determine the correct value.
 - "parenthesized_variant": The artist or album name has a redundant romanization/translation in parentheses (e.g. "葉加瀬太郎 (Taro Hakase)"). Remove the parenthesized part and use the canonical name. For Japanese artists, use the Japanese name. For Western artists, use the Western name.
 
@@ -211,7 +223,7 @@ Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
 }}
 
 If a field doesn't need correction, use the value from the best candidate.
-Only include track_titles if you can determine them; omit the field if unsure."""
+Only include track_titles if you can determine them with confidence and the count matches the disc; omit the field if unsure. Never invent placeholder titles."""
 
 
 async def _call_claude(api_key: str, model_id: str, prompt: str) -> dict | None:
