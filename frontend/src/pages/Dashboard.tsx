@@ -58,6 +58,19 @@ function progressPercent(job: JobSummary): number {
   return 0;
 }
 
+// crypto.randomUUID() requires a secure context (HTTPS or localhost).
+// Non-HTTPS access via LAN / Tailscale IP falls back to a Math.random-based UUIDv4.
+function makeAlbumGroupId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -175,7 +188,7 @@ export default function Dashboard() {
     setRipAllPending(true);
     try {
       // Generate shared album_group when multi-disc is enabled
-      const albumGroup = ripAllMultiDisc ? crypto.randomUUID() : undefined;
+      const albumGroup = ripAllMultiDisc ? makeAlbumGroupId() : undefined;
       const totalDiscs = ripAllMultiDisc ? rippableDrives.length : undefined;
 
       for (const drive of rippableDrives) {
