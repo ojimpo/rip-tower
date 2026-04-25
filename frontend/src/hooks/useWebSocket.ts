@@ -37,6 +37,10 @@ export function useWebSocket(onEvent?: (event: WsEvent) => void) {
         case "drive:disc_ejected":
           queryClient.invalidateQueries({ queryKey: ["drives"] });
           break;
+        case "job:gnudb_submitted":
+          queryClient.invalidateQueries({ queryKey: ["gnudb", event.job_id] });
+          queryClient.invalidateQueries({ queryKey: ["job", event.job_id] });
+          break;
       }
 
       // Call custom handler if provided

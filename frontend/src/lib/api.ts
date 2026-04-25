@@ -39,8 +39,17 @@ export const api = {
   // Metadata
   updateMetadata: (jobId: string, body: Record<string, unknown>) =>
     request(`/jobs/${jobId}/metadata`, { method: "PUT", body: JSON.stringify(body) }),
-  approveMetadata: (jobId: string) =>
-    request(`/jobs/${jobId}/metadata/approve`, { method: "POST" }),
+  approveMetadata: (
+    jobId: string,
+    options?: { submitToGnudb?: boolean; gnudbCategory?: string | null }
+  ) =>
+    request(`/jobs/${jobId}/metadata/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        submit_to_gnudb: options?.submitToGnudb ?? false,
+        gnudb_category: options?.gnudbCategory ?? null,
+      }),
+    }),
   applyMetadata: (jobId: string) =>
     request(`/jobs/${jobId}/metadata/apply`, { method: "POST" }),
   reResolve: (jobId: string) =>
@@ -159,4 +168,17 @@ export const api = {
   getSettings: () => request("/settings"),
   updateSettings: (body: Record<string, unknown>) =>
     request("/settings", { method: "PUT", body: JSON.stringify(body) }),
+
+  // GnuDB submit
+  gnudbHistory: (jobId: string) => request(`/jobs/${jobId}/gnudb`),
+  gnudbPreview: (jobId: string, category?: string | null) =>
+    request(`/jobs/${jobId}/gnudb/preview`, {
+      method: "POST",
+      body: JSON.stringify({ category: category ?? null }),
+    }),
+  gnudbSubmit: (jobId: string, category?: string | null) =>
+    request(`/jobs/${jobId}/gnudb/submit`, {
+      method: "POST",
+      body: JSON.stringify({ category: category ?? null }),
+    }),
 };

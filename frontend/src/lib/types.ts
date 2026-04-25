@@ -30,6 +30,24 @@ export interface Job {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  gnudb_submittable?: boolean;
+  gnudb_already_accepted?: boolean;
+}
+
+export interface GnudbSubmission {
+  id: number;
+  disc_id: string;
+  category: string;
+  mode: "test" | "submit";
+  response_code: number | null;
+  response_body: string | null;
+  error: string | null;
+  submitted_at: string;
+}
+
+export interface GnudbHistory {
+  submissions: GnudbSubmission[];
+  accepted: boolean;
 }
 
 export interface JobMetadata {
@@ -183,4 +201,13 @@ export type WsEvent =
   | { type: "drive:disconnected"; drive_id: string; name: string }
   | { type: "drive:disc_inserted"; drive_id: string }
   | { type: "drive:disc_ejected"; drive_id: string }
-  | { type: "drive:update"; drive_id: string };
+  | { type: "drive:update"; drive_id: string }
+  | {
+      type: "job:gnudb_submitted";
+      job_id: string;
+      submission_id: number | null;
+      mode: "test" | "submit";
+      status: "accepted" | "rejected";
+      response_code: number | null;
+      reason: string;
+    };

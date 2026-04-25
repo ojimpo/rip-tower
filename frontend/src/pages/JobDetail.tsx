@@ -5,7 +5,13 @@ import { useJob } from "../hooks/useJob";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { api } from "../lib/api";
 import EditableField from "../components/EditableField";
-import type { Track, GroupResponse, JobSummary, ConflictsResponse } from "../lib/types";
+import type {
+  Track,
+  GroupResponse,
+  JobSummary,
+  ConflictsResponse,
+  GnudbHistory,
+} from "../lib/types";
 
 type Tab = "metadata" | "artwork" | "lyrics" | "kashidashi";
 
@@ -35,11 +41,34 @@ export default function JobDetail() {
     queryClient.invalidateQueries({ queryKey: ["job", jobId] });
   }, [queryClient, jobId]);
 
+  const [submitToGnudb, setSubmitToGnudb] = useState(false);
+  const [gnudbCategory, setGnudbCategory] = useState<string>("");
+  const [gnudbCategoryOverride, setGnudbCategoryOverride] = useState(false);
+
   const approveMutation = useMutation({
-    mutationFn: () => api.approveMetadata(jobId),
+    mutationFn: () =>
+      api.approveMetadata(jobId, {
+        submitToGnudb,
+        gnudbCategory: gnudbCategoryOverride && gnudbCategory ? gnudbCategory : null,
+      }),
     onSuccess: () => {
       invalidateJob();
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+
+  const gnudbHistoryQuery = useQuery<GnudbHistory>({
+    queryKey: ["gnudb", jobId],
+    queryFn: () => api.gnudbHistory(jobId) as Promise<GnudbHistory>,
+    enabled: !!jobId,
+  });
+
+  const gnudbManualSubmitMutation = useMutation({
+    mutationFn: (category: string | null) =>
+      api.gnudbSubmit(jobId, category),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["gnudb", jobId] });
+      invalidateJob();
     },
   });
 
@@ -765,6 +794,16 @@ export default function JobDetail() {
           {/* Approve Button */}
           {job.status === "review" && (
             <div className="mx-4 mb-6">
+              {job.gnudb_submittable && (
+                <GnudbApproveBlock
+                  submit={submitToGnudb}
+                  setSubmit={setSubmitToGnudb}
+                  category={gnudbCategory}
+                  setCategory={setGnudbCategory}
+                  override={gnudbCategoryOverride}
+                  setOverride={setGnudbCategoryOverride}
+                />
+              )}
               <button
                 onClick={() => approveMutation.mutate()}
                 disabled={approveMutation.isPending || hasExistingFilesIssue}
@@ -778,6 +817,21 @@ export default function JobDetail() {
                 </p>
               )}
             </div>
+          )}
+
+          {/* GnuDB: history + manual submit (also for complete jobs) */}
+          {((gnudbHistoryQuery.data?.submissions?.length ?? 0) > 0 ||
+            job.gnudb_submittable) && (
+            <GnudbSection
+              canSubmit={!!job.gnudb_submittable}
+              alreadyAccepted={!!job.gnudb_already_accepted}
+              history={gnudbHistoryQuery.data}
+              onSubmit={(category) =>
+                gnudbManualSubmitMutation.mutate(category)
+              }
+              submitting={gnudbManualSubmitMutation.isPending}
+              error={gnudbManualSubmitMutation.error as Error | null}
+            />
           )}
         </div>
       )}
@@ -1179,5 +1233,191 @@ function TrackTitleEditor({
       }}
       className="bg-[#0f0f1a] border border-white/10 rounded px-1 py-0 text-xs text-gray-200 outline-none focus:border-[#e94560] w-full"
     />
+  );
+}
+
+
+// ────────── GnuDB: review-screen approve checkbox + override ──────────
+
+const GNUDB_CATEGORIES = [
+  "rock", "jazz", "classical", "folk", "country",
+  "blues", "newage", "reggae", "soundtrack", "misc", "data",
+] as const;
+
+function GnudbApproveBlock({
+  submit, setSubmit,
+  category, setCategory,
+  override, setOverride,
+}: {
+  submit: boolean;
+  setSubmit: (v: boolean) => void;
+  category: string;
+  setCategory: (v: string) => void;
+  override: boolean;
+  setOverride: (v: boolean) => void;
+}) {
+  return (
+    <div className="mb-3 rounded-xl bg-[#16213e] border border-white/5 px-3 py-2.5">
+      <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
+        <input
+          type="checkbox"
+          checked={submit}
+          onChange={(e) => setSubmit(e.target.checked)}
+          className="accent-[#e94560]"
+        />
+        GnuDB にも送信する
+      </label>
+      <p className="text-[10px] text-gray-500 mt-1.5 leading-relaxed">
+        承認後、確定したメタデータを GnuDB に投稿します。次に同じ disc を入れた人が自動解決できるようになります。
+      </p>
+      {submit && (
+        <div className="mt-2">
+          <label className="flex items-center gap-2 cursor-pointer text-[11px] text-gray-400">
+            <input
+              type="checkbox"
+              checked={override}
+              onChange={(e) => setOverride(e.target.checked)}
+              className="accent-[#e94560]"
+            />
+            カテゴリを手動指定
+          </label>
+          {override && (
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="mt-1.5 w-full bg-[#0f0f1a] border border-white/10 rounded text-xs text-gray-200 px-2 py-1 outline-none focus:border-[#e94560]"
+            >
+              <option value="">（自動判定）</option>
+              {GNUDB_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ────────── GnuDB: history + manual submit (also for complete jobs) ──────────
+
+function GnudbSection({
+  canSubmit,
+  alreadyAccepted,
+  history,
+  onSubmit,
+  submitting,
+  error,
+}: {
+  canSubmit: boolean;
+  alreadyAccepted: boolean;
+  history: import("../lib/types").GnudbHistory | undefined;
+  onSubmit: (category: string | null) => void;
+  submitting: boolean;
+  error: Error | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<string>("");
+  const submissions = history?.submissions ?? [];
+
+  return (
+    <div className="mx-4 mb-6">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg bg-[#16213e] border border-white/5 hover:border-white/10 transition"
+      >
+        <span className="text-xs font-semibold text-gray-400">
+          GnuDB
+          {alreadyAccepted && (
+            <span className="ml-2 text-[10px] text-emerald-400">登録済み</span>
+          )}
+          {submissions.length > 0 && (
+            <span className="ml-2 text-[10px] text-gray-500">
+              {submissions.length} 履歴
+            </span>
+          )}
+        </span>
+        <svg
+          className={`w-4 h-4 text-gray-500 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="mt-1 rounded-lg bg-[#16213e] border border-white/5 p-3 space-y-3">
+          {/* Manual submit (only for complete jobs not yet accepted) */}
+          {canSubmit && !alreadyAccepted && (
+            <div>
+              <label className="block text-[11px] text-gray-400 mb-1">
+                カテゴリ（空欄なら genre から自動判定）
+              </label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full bg-[#0f0f1a] border border-white/10 rounded text-xs text-gray-200 px-2 py-1.5 outline-none focus:border-[#e94560] mb-2"
+              >
+                <option value="">（自動判定）</option>
+                {GNUDB_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => onSubmit(category || null)}
+                disabled={submitting}
+                className="w-full text-xs font-medium py-2 rounded-lg bg-[#e94560]/20 text-[#e94560] hover:bg-[#e94560]/30 transition disabled:opacity-50"
+              >
+                {submitting ? "送信中..." : "GnuDB に送信"}
+              </button>
+              {error && (
+                <p className="text-[11px] text-red-400 mt-2">{error.message}</p>
+              )}
+            </div>
+          )}
+
+          {/* History */}
+          {submissions.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-gray-500">送信履歴</p>
+              {submissions.map((s) => {
+                const accepted = s.mode === "submit" && s.response_code === 200;
+                const ok = s.response_code === 200;
+                return (
+                  <details key={s.id} className="rounded-lg bg-white/5 border border-white/5">
+                    <summary className="cursor-pointer px-2.5 py-1.5 text-[11px] text-gray-300 flex items-center justify-between">
+                      <span>
+                        <span className="font-mono mr-1.5">{s.mode}</span>
+                        <span className="text-gray-500">{s.category}</span>
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${
+                          accepted
+                            ? "bg-emerald-500/20 text-emerald-400"
+                            : ok
+                              ? "bg-amber-500/20 text-amber-400"
+                              : "bg-red-500/20 text-red-400"
+                        }`}
+                      >
+                        {s.error ? "error" : s.response_code ?? "?"}
+                      </span>
+                    </summary>
+                    <pre className="px-2.5 pb-2 text-[10px] text-gray-400 font-mono whitespace-pre-wrap break-all">
+                      {s.error || s.response_body || "(no response)"}
+                    </pre>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+
+          {alreadyAccepted && (
+            <p className="text-[11px] text-emerald-400 leading-relaxed">
+              この disc は既に GnuDB に登録済みです。GnuDB は登録済みエントリの修正に対応していないため、再送信はできません。
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

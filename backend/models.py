@@ -52,6 +52,8 @@ class Job(Base):
     output_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     disc_total_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    disc_offsets: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of int LBA
+    disc_leadout: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discord_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -74,6 +76,11 @@ class Job(Base):
     )
     kashidashi_candidates: Mapped[list["KashidashiCandidate"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
+    )
+    gnudb_submissions: Mapped[list["GnudbSubmission"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="GnudbSubmission.submitted_at",
     )
     drive: Mapped["Drive | None"] = relationship()
 
@@ -173,3 +180,22 @@ class KashidashiCandidate(Base):
     matched: Mapped[bool] = mapped_column(Boolean, default=False)
 
     job: Mapped["Job"] = relationship(back_populates="kashidashi_candidates")
+
+
+class GnudbSubmission(Base):
+    __tablename__ = "gnudb_submissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("jobs.id"), nullable=False, index=True
+    )
+    disc_id: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    submit_mode: Mapped[str] = mapped_column(Text, nullable=False)  # "test" | "submit"
+    response_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    xmcd_body: Mapped[str] = mapped_column(Text, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    job: Mapped["Job"] = relationship(back_populates="gnudb_submissions")

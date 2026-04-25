@@ -6,7 +6,7 @@ import type { Drive, TrashResponse } from "../lib/types";
 interface AppConfig {
   general: { auto_approve_threshold: number; reminder_initial_hours: number; reminder_interval_hours: number; base_url: string };
   output: { format: string; quality: number; music_dir: string; incoming_dir: string; folder_template: string; file_template: string };
-  integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_token: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string };
+  integrations: { discord_webhook: string; discogs_token: string; musixmatch_token: string; plex_url: string; plex_token: string; plex_section_id: number | null; llm_api_key: string; llm_model: string; kashidashi_url: string; gnudb_url: string; gnudb_email: string; gnudb_client_name: string; gnudb_client_version: string; gnudb_enabled: boolean };
 }
 
 const SOURCE_TYPES = [
@@ -385,6 +385,35 @@ export default function Settings() {
                   className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
                 />
               </div>
+            </div>
+            <div className="pt-2 border-t border-white/5">
+              <label className="text-xs text-gray-400 mb-1.5 block">GnuDB</label>
+              <label className="flex items-center gap-2 text-[11px] text-gray-300 cursor-pointer mb-2">
+                <input
+                  type="checkbox"
+                  checked={cfg.integrations.gnudb_enabled}
+                  onChange={(e) => updateConfig((c) => ({ ...c, integrations: { ...c.integrations, gnudb_enabled: e.target.checked } }))}
+                  className="accent-[#e94560]"
+                />
+                有効化（review 画面に「GnuDB にも送信」を表示）
+              </label>
+              <label className="text-[10px] text-gray-500 block mb-1">投稿用メールアドレス</label>
+              <input
+                type="email"
+                value={cfg.integrations.gnudb_email}
+                onChange={(e) => updateConfig((c) => ({ ...c, integrations: { ...c.integrations, gnudb_email: e.target.value } }))}
+                placeholder="you@example.com"
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560] mb-2"
+              />
+              <label className="text-[10px] text-gray-500 block mb-1">サーバー URL</label>
+              <input
+                type="url"
+                value={cfg.integrations.gnudb_url}
+                onChange={(e) => updateConfig((c) => ({ ...c, integrations: { ...c.integrations, gnudb_url: e.target.value } }))}
+                placeholder="https://gnudb.gnudb.org"
+                className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
+              />
+              <p className="text-[10px] text-gray-600 mt-1">人手で正したメタデータを投稿し直して GnuDB に還元します。投稿は test mode で構文検証してから本送信します。</p>
             </div>
           </div>
         </details>

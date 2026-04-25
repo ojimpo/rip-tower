@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -253,6 +254,12 @@ async def get_job(
         select(KashidashiCandidate).where(KashidashiCandidate.job_id == job_id)
     )
 
+    from backend.config import get_config
+    from backend.services.gnudb_submit import already_accepted as _gnudb_accepted
+
+    gnudb_enabled = get_config().integrations.gnudb_enabled
+    gnudb_already_accepted = await _gnudb_accepted(job_id)
+
     return {
         "job": {
             "id": job.id,
@@ -266,6 +273,14 @@ async def get_job(
             "created_at": _utc_iso(job.created_at),
             "updated_at": _utc_iso(job.updated_at),
             "completed_at": _utc_iso(job.completed_at),
+            "gnudb_submittable": (
+                gnudb_enabled
+                and bool(job.disc_id)
+                and bool(job.disc_offsets)
+                and bool(job.disc_leadout)
+                and not gnudb_already_accepted
+            ),
+            "gnudb_already_accepted": gnudb_already_accepted,
         },
         "metadata": {
             "artist": meta.artist,
@@ -399,12 +414,23 @@ async def update_metadata(
     return {"status": "updated", "group_synced": synced_count}
 
 
+class ApproveRequest(BaseModel):
+    submit_to_gnudb: bool = False
+    gnudb_category: Optional[str] = None
+
+
 @router.post("/jobs/{job_id}/metadata/approve")
 async def approve_metadata(
     job_id: str,
+    request: Optional[ApproveRequest] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """Approve metadata and proceed to finalizing."""
+    """Approve metadata and proceed to finalizing.
+
+    If `submit_to_gnudb` is set, kicks off an async GnuDB submission after
+    finalize starts. The submission runs in the background; failures are
+    reported via the job:gnudb_submitted WebSocket event.
+    """
     job = await session.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -428,7 +454,36 @@ async def approve_metadata(
 
     asyncio.create_task(run_finalize(job_id))
 
+    if request and request.submit_to_gnudb:
+        from backend.services.gnudb_submit import submit_with_test_first
+
+        asyncio.create_task(
+            _safe_gnudb_submit(job_id, request.gnudb_category)
+        )
+
     return {"status": "finalizing"}
+
+
+async def _safe_gnudb_submit(job_id: str, category: str | None) -> None:
+    """Wrapper that records GnuDB submit failures without crashing the task."""
+    from backend.services.gnudb_submit import submit_with_test_first
+    from backend.services.websocket import broadcast
+
+    try:
+        await submit_with_test_first(job_id, category=category)
+    except Exception as e:
+        logger.exception("GnuDB submit failed for job %s", job_id)
+        await broadcast(
+            "job:gnudb_submitted",
+            {
+                "job_id": job_id,
+                "submission_id": None,
+                "mode": "test",
+                "status": "rejected",
+                "response_code": None,
+                "reason": f"{type(e).__name__}: {e}",
+            },
+        )
 
 
 @router.post("/jobs/{job_id}/metadata/apply")
@@ -1105,3 +1160,87 @@ async def re_rip_failed(
         asyncio.create_task(run_re_rip_track(job_id, num, None))
 
     return {"status": "re-ripping", "tracks": track_nums}
+
+
+# ─────────────────── GnuDB submit ───────────────────
+
+
+class GnudbSubmitRequest(BaseModel):
+    category: Optional[str] = None
+
+
+@router.post("/jobs/{job_id}/gnudb/preview")
+async def gnudb_preview(
+    job_id: str,
+    request: Optional[GnudbSubmitRequest] = None,
+):
+    """Submit in test mode and return the response + xmcd for inspection."""
+    from backend.services.gnudb_submit import submit, build_xmcd
+
+    category = request.category if request else None
+    try:
+        record = await submit(job_id, mode="test", category=category)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "submission_id": record.id,
+        "mode": record.submit_mode,
+        "category": record.category,
+        "response_code": record.response_code,
+        "response_body": record.response_body,
+        "error": record.error,
+        "xmcd": record.xmcd_body,
+    }
+
+
+@router.post("/jobs/{job_id}/gnudb/submit")
+async def gnudb_submit_endpoint(
+    job_id: str,
+    request: Optional[GnudbSubmitRequest] = None,
+):
+    """Submit for real, with a test-first safety check."""
+    from backend.services.gnudb_submit import submit_with_test_first
+
+    category = request.category if request else None
+    try:
+        record = await submit_with_test_first(job_id, category=category)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "submission_id": record.id,
+        "mode": record.submit_mode,
+        "category": record.category,
+        "response_code": record.response_code,
+        "response_body": record.response_body,
+        "error": record.error,
+        "accepted": record.submit_mode == "submit" and record.response_code == 200,
+    }
+
+
+@router.get("/jobs/{job_id}/gnudb")
+async def gnudb_history(
+    job_id: str,
+):
+    """List past GnuDB submissions for a job."""
+    from backend.services.gnudb_submit import list_submissions
+
+    submissions = await list_submissions(job_id)
+    return {
+        "submissions": [
+            {
+                "id": s.id,
+                "disc_id": s.disc_id,
+                "category": s.category,
+                "mode": s.submit_mode,
+                "response_code": s.response_code,
+                "response_body": s.response_body,
+                "error": s.error,
+                "submitted_at": _utc_iso(s.submitted_at),
+            }
+            for s in submissions
+        ],
+        "accepted": any(
+            s.submit_mode == "submit" and s.response_code == 200
+            for s in submissions
+        ),
+    }

@@ -11,6 +11,7 @@ Example:
 
 import asyncio
 import hashlib
+import json
 import logging
 from dataclasses import dataclass
 
@@ -79,6 +80,8 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
             job.disc_id = disc_id
             job.toc_hash = toc_hash
             job.disc_total_seconds = total_seconds
+            job.disc_offsets = json.dumps(offsets)
+            job.disc_leadout = leadout
 
         for i in range(1, track_count + 1):
             track = Track(
@@ -168,11 +171,18 @@ async def restore_identity(job_id: str) -> DiscIdentity | None:
         )
         track_count = len(result.scalars().all())
 
+    offsets: list[int] = []
+    if job.disc_offsets:
+        try:
+            offsets = list(json.loads(job.disc_offsets))
+        except (json.JSONDecodeError, TypeError):
+            offsets = []
+
     identity = DiscIdentity(
         disc_id=job.disc_id,
         track_count=track_count,
-        offsets=[],  # Not stored; CDDB won't work but MusicBrainz will
-        leadout=0,
+        offsets=offsets,
+        leadout=job.disc_leadout or 0,
         toc_hash=job.toc_hash or "",
         total_seconds=job.disc_total_seconds or 0,
     )

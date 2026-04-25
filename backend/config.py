@@ -36,6 +36,11 @@ DEFAULT_CONFIG = {
         "llm_api_key": "",
         "llm_model": "haiku",
         "kashidashi_url": "http://kashidashi-app-web-1:18080",
+        "gnudb_url": "https://gnudb.gnudb.org",
+        "gnudb_email": "",
+        "gnudb_client_name": "rip-tower",
+        "gnudb_client_version": "0.1.0",
+        "gnudb_enabled": False,
     },
 }
 
@@ -70,6 +75,11 @@ class IntegrationsConfig(BaseModel):
     llm_api_key: str = ""
     llm_model: str = "haiku"
     kashidashi_url: str = "http://kashidashi-app-web-1:18080"
+    gnudb_url: str = "https://gnudb.gnudb.org"
+    gnudb_email: str = ""
+    gnudb_client_name: str = "rip-tower"
+    gnudb_client_version: str = "0.1.0"
+    gnudb_enabled: bool = False
 
 
 class AppConfig(BaseModel):
