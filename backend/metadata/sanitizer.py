@@ -42,6 +42,7 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
 
     if not candidates:
         logger.info("No metadata candidates for job %s", job_id)
+        await _ensure_placeholder_metadata(job_id)
         return None
 
     # Sanitize each candidate in place
@@ -289,6 +290,38 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         job_id, artist, album, confidence, issues,
     )
     return meta
+
+
+async def _ensure_placeholder_metadata(job_id: str) -> None:
+    """Create an empty JobMetadata row when no candidates were found.
+
+    Establishes the invariant: any job past resolving has a JobMetadata row.
+    Without this, manual edits via PUT /jobs/{id}/metadata 404 and the
+    review UI has nothing to bind to. The placeholder is flagged
+    needs_review with issue=no_metadata so it stays out of auto-approve.
+    """
+    async with async_session() as session:
+        existing = await session.get(JobMetadata, job_id)
+        if existing:
+            # Preserve any pre-existing row (e.g. disc_number set at job creation).
+            # Just make sure it can't slip through auto-approve when nothing was resolved.
+            if not existing.artist and not existing.album:
+                existing.confidence = 0
+                existing.source = "none"
+                existing.needs_review = True
+                existing.issues = json.dumps(["no_metadata"], ensure_ascii=False)
+                await session.commit()
+            return
+
+        meta = JobMetadata(
+            job_id=job_id,
+            confidence=0,
+            source="none",
+            needs_review=True,
+            issues=json.dumps(["no_metadata"], ensure_ascii=False),
+        )
+        session.add(meta)
+        await session.commit()
 
 
 async def _get_track_count(job_id: str) -> int:

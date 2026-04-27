@@ -128,3 +128,67 @@ def test_pick_best_source_preference_breaks_ties():
     ]
     result = sanitizer._pick_best_track_titles(candidates, expected_count=3)
     assert result["source"] == "musicbrainz"
+
+
+# ───────────────── sanitize_candidates: no-candidate placeholder ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_sanitize_candidates_creates_placeholder_when_no_candidates(
+    monkeypatch, async_session_maker,
+):
+    """When resolve produces zero candidates, a placeholder JobMetadata row
+    must still exist so manual edits via PUT /metadata work and the row can
+    be carried through review/approve."""
+    from backend.models import Job, JobMetadata
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-empty", drive_id="d", disc_id="disc-empty"))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-empty")
+    assert result is None  # contract: caller's `if best:` branches stay skipped
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "job-empty")
+
+    assert meta is not None
+    assert meta.artist is None
+    assert meta.album is None
+    assert meta.confidence == 0
+    assert meta.source == "none"
+    assert meta.needs_review is True
+    assert json.loads(meta.issues) == ["no_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_sanitize_candidates_no_candidates_preserves_existing_disc_info(
+    monkeypatch, async_session_maker,
+):
+    """A pre-existing JobMetadata row from job creation (disc_number/total_discs)
+    must be kept; we only stamp the no-metadata flags on top."""
+    from backend.models import Job, JobMetadata
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-disc2", drive_id="d", disc_id="disc-disc2"))
+        s.add(JobMetadata(
+            job_id="job-disc2",
+            disc_number=2,
+            total_discs=3,
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-disc2")
+    assert result is None
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "job-disc2")
+
+    assert meta.disc_number == 2
+    assert meta.total_discs == 3
+    assert meta.needs_review is True
+    assert json.loads(meta.issues) == ["no_metadata"]
