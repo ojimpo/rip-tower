@@ -38,12 +38,20 @@ async def resolve(
     from backend.metadata.sources.cddb import CddbSource
     from backend.metadata.sources.itunes import ItunesSource
 
-    sources = [
-        MusicBrainzSource(),
-        DiscogsSource(),
-        KashidashiSource(),
-        HmvSource(),
+    # Two-phase resolution:
+    #   Phase 1 — disc-ID-based sources (work without text hints)
+    #   Phase 2 — text-search-based sources (need artist/album hints to be useful)
+    # Phase 1 results enrich the hints for Phase 2, so e.g. CDDB's artist+album
+    # can drive iTunes/Discogs/HMV searches that would otherwise return nothing.
+    phase1_sources = [
+        MusicBrainzSource(mode="disc_id"),
         CddbSource(),
+        KashidashiSource(),
+    ]
+    phase2_sources = [
+        MusicBrainzSource(mode="text_search"),
+        DiscogsSource(),
+        HmvSource(),
         ItunesSource(),
     ]
 
@@ -61,19 +69,28 @@ async def resolve(
         )
         await session.commit()
 
-    # Query all sources in parallel
-    tasks = [
-        asyncio.create_task(
-            _query_source(source, job_id, identity, hints)
-        )
-        for source in sources
+    # ---- Phase 1: disc-ID-based sources ----
+    phase1_tasks = [
+        asyncio.create_task(_query_source(source, job_id, identity, hints))
+        for source in phase1_sources
     ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # Log errors
-    for source, result in zip(sources, results):
+    phase1_results = await asyncio.gather(*phase1_tasks, return_exceptions=True)
+    for source, result in zip(phase1_sources, phase1_results):
         if isinstance(result, Exception):
-            logger.warning("Source %s failed: %s", source.name, result)
+            logger.warning("Phase 1 source %s failed: %s", source.name, result)
+
+    # Build enriched hints from Phase 1 candidates
+    enriched_hints = await _enrich_hints(job_id, hints)
+
+    # ---- Phase 2: text-search-based sources, using enriched hints ----
+    phase2_tasks = [
+        asyncio.create_task(_query_source(source, job_id, identity, enriched_hints))
+        for source in phase2_sources
+    ]
+    phase2_results = await asyncio.gather(*phase2_tasks, return_exceptions=True)
+    for source, result in zip(phase2_sources, phase2_results):
+        if isinstance(result, Exception):
+            logger.warning("Phase 2 source %s failed: %s", source.name, result)
 
     # Sanitize and rank
     from backend.metadata.sanitizer import sanitize_candidates
@@ -106,6 +123,48 @@ async def resolve(
     await asyncio.gather(artwork_task, lyrics_task, kashidashi_task, return_exceptions=True)
 
     logger.info("Metadata resolution complete for job %s", job_id)
+
+
+async def _enrich_hints(job_id: str, hints: dict | None) -> dict:
+    """Build text-search hints from Phase 1 candidates.
+
+    Picks the highest-confidence Phase 1 candidate's artist/album as the
+    text-search hints for Phase 2 sources (iTunes/HMV/Discogs). Original
+    hints (e.g. catalog number from filename) take precedence.
+
+    Phase 1 sources (MB-discID, CDDB, kashidashi) get authoritative artist/album
+    from the disc — this lets us feed Phase 2 sources useful search terms even
+    when the user didn't provide any.
+    """
+    enriched: dict = dict(hints or {})
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(MetadataCandidate)
+            .where(MetadataCandidate.job_id == job_id)
+            .order_by(MetadataCandidate.confidence.desc())
+        )
+        candidates = list(result.scalars().all())
+
+    if not candidates:
+        return enriched
+
+    # Take artist/album from highest-confidence candidate that has them
+    for c in candidates:
+        if not enriched.get("artist") and c.artist:
+            enriched["artist"] = c.artist
+        if not enriched.get("title") and c.album:
+            # Strip common disc-suffix patterns so text search isn't poisoned
+            # by "Album [Disc 2]" or "Album / 30th giving 1" garbage.
+            from backend.metadata.normalize import extract_disc_info
+            base, disc_num = extract_disc_info(c.album)
+            enriched["title"] = base
+            if disc_num and not enriched.get("disc_number"):
+                enriched["disc_number"] = disc_num
+        if enriched.get("artist") and enriched.get("title"):
+            break
+
+    return enriched
 
 
 async def _query_source(source, job_id: str, identity, hints: dict | None) -> None:

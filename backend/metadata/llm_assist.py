@@ -29,6 +29,7 @@ LLM_TRIGGER_ISSUES = {
     "artist_contradiction",
     "album_contradiction",
     "parenthesized_variant",
+    "annotated_track_titles",
 }
 
 # Model mapping for config shorthand

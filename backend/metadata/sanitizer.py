@@ -87,17 +87,21 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     if disc_number and disc_number >= 1 and not source_total_discs:
         inferred_total_discs = max(disc_number, 2)
 
+    # ---- Pick best track_titles independently of best album metadata ----
+    # Album/artist may come from the highest-confidence candidate, but track titles
+    # are selected separately by quality (track count match, no mojibake, no
+    # placeholders, low annotation density, source preference). This lets us
+    # combine e.g. CDDB album info with iTunes/MB clean track titles.
+    expected_track_count = await _get_track_count(job_id)
+    track_source = _pick_best_track_titles(candidates, expected_track_count)
+    raw_titles: list[str] = track_source["titles"] if track_source else []
+
     # Compilation detection from track titles
     is_compilation = False
     track_titles: list[str] = []
     track_artists: list[str] = []
 
-    if best.track_titles:
-        try:
-            raw_titles = json.loads(best.track_titles)
-        except (json.JSONDecodeError, TypeError):
-            raw_titles = []
-
+    if raw_titles:
         compilation_count = 0
         for t in raw_titles:
             if " / " in t:
@@ -113,19 +117,13 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
             is_compilation = True
             artist = normalize_various_artists(artist) if artist else "Various Artists"
 
-    # Merge track titles from lower-ranked candidates if best has none
-    if not track_titles:
-        for c in candidates[1:]:
-            if c.track_titles:
-                try:
-                    fallback = json.loads(c.track_titles)
-                    if fallback:
-                        track_titles = fallback
-                        break
-                except (json.JSONDecodeError, TypeError):
-                    pass
+    # Flag annotation-heavy track titles (CDDB tie-up notes etc.) so the user
+    # is prompted to review even when confidence is otherwise high.
+    if track_source and track_source.get("annotation_ratio", 0) >= 0.3:
+        issues.append("annotated_track_titles")
 
     # Check for placeholder tracks
+    clear_placeholder_titles = False
     if not track_titles:
         issues.append("no_track_titles")
     elif all(re.match(r"^Track\s*\d+$", t, re.IGNORECASE) for t in track_titles):
@@ -154,8 +152,6 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         track_titles = []
         track_artists = []
         clear_placeholder_titles = True
-    else:
-        clear_placeholder_titles = False
 
     # Mojibake detection
     for text in [artist, album] + track_titles:
@@ -293,6 +289,129 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         job_id, artist, album, confidence, issues,
     )
     return meta
+
+
+async def _get_track_count(job_id: str) -> int:
+    """Number of tracks actually ripped — used as a hard signal for picking track_titles."""
+    async with async_session() as session:
+        from sqlalchemy import func
+        result = await session.execute(
+            select(func.count(Track.id)).where(Track.job_id == job_id)
+        )
+        return result.scalar() or 0
+
+
+# Source preference order for track titles when scores tie. iTunes/MB/Discogs
+# tend to have curated track listings; CDDB is community-submitted and often
+# carries tie-up annotations or placeholder text; HMV is scraped and noisy.
+_TRACK_SOURCE_BONUS = {
+    "musicbrainz": 15,
+    "itunes": 10,
+    "discogs": 8,
+    "llm": 5,
+    "hmv": 3,
+    "cddb": -10,
+}
+
+# Strong tie-up/show/remaster keywords. Generic variant markers (Live, Edit,
+# Version, Mix) are deliberately excluded — they're often part of canonical
+# track titles ("Track Name (Single Edit)") rather than added annotations.
+_ANNOTATION_KEYWORDS = (
+    "主題歌", "テーマ曲", "CMソング", "オープニング", "エンディング",
+    "挿入歌", "ドラマ", "映画", "Remastering", "Remaster", "LIVE FILM",
+)
+
+
+def _has_annotation(title: str) -> bool:
+    """Detect tie-up/tour/remaster annotations appended to a track title.
+
+    Triggers when:
+    - Title contains 『...』 (Japanese quotes — typically wrap tour/movie/show titles)
+    - Title ends with a parenthesized phrase ≥ 8 chars containing a strong
+      annotation keyword (主題歌, ドラマ, Remastering, etc.)
+    """
+    if not title:
+        return False
+    if "『" in title or "』" in title:
+        return True
+    m = re.search(r"[\(（]([^)）]{8,})[\)）]\s*$", title)
+    if m:
+        inner = m.group(1)
+        if any(kw in inner for kw in _ANNOTATION_KEYWORDS):
+            return True
+    return False
+
+
+def _pick_best_track_titles(
+    candidates: list[MetadataCandidate],
+    expected_count: int,
+) -> dict | None:
+    """Score each candidate's track_titles and return the best one.
+
+    Scoring (per candidate that has track_titles):
+      base                                     = candidate.confidence (0-100)
+      track count match    +25  / mismatch     -50 (hard penalty)
+      no mojibake          +10  / has mojibake -40
+      no placeholder       +10  / placeholder  -50
+      annotation ratio                          -30 * ratio (0..1)
+      source preference                         see _TRACK_SOURCE_BONUS
+
+    Returns: {"titles": [...], "source": "...", "score": int, "annotation_ratio": float}
+    or None if no candidate has any titles.
+    """
+    best: dict | None = None
+    best_score = -10**6
+
+    for c in candidates:
+        if not c.track_titles:
+            continue
+        try:
+            titles = json.loads(c.track_titles)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not titles or not isinstance(titles, list):
+            continue
+
+        score = c.confidence or 0
+
+        # Track count match — strongest signal
+        if expected_count:
+            if len(titles) == expected_count:
+                score += 25
+            else:
+                score -= 50
+
+        # Placeholder pattern: "Track NN" or pure digits
+        is_placeholder = (
+            all(re.match(r"^Track\s*\d+$", t, re.IGNORECASE) for t in titles)
+            or all(t and re.match(r"^\d{1,4}$", t.strip()) for t in titles)
+        )
+        if is_placeholder:
+            score -= 50
+
+        # Mojibake on any title disqualifies heavily
+        has_mojibake = any(_looks_like_mojibake(t) for t in titles)
+        score += -40 if has_mojibake else 10
+
+        # Annotation density — many sources tack tie-up names onto tracks;
+        # canonical sources don't.
+        annotated = sum(1 for t in titles if _has_annotation(t))
+        annotation_ratio = annotated / len(titles) if titles else 0.0
+        score -= int(30 * annotation_ratio)
+
+        # Source preference
+        score += _TRACK_SOURCE_BONUS.get(c.source, 0)
+
+        if score > best_score:
+            best_score = score
+            best = {
+                "titles": titles,
+                "source": c.source,
+                "score": score,
+                "annotation_ratio": annotation_ratio,
+            }
+
+    return best
 
 
 def _sanitize_text(text: str) -> str:
