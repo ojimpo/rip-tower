@@ -640,6 +640,29 @@ async def re_rip(
     return {"status": "re-ripping"}
 
 
+@router.post("/jobs/{job_id}/re-rip/failed")
+async def re_rip_failed(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-rip only failed tracks."""
+    failed = await session.execute(
+        select(Track)
+        .where(Track.job_id == job_id, Track.rip_status == "failed")
+    )
+    track_nums = [t.track_num for t in failed.scalars()]
+    if not track_nums:
+        return {"status": "no_failed_tracks"}
+
+    from backend.services.pipeline import run_re_rip_track
+    import asyncio
+
+    for num in track_nums:
+        asyncio.create_task(run_re_rip_track(job_id, num, None))
+
+    return {"status": "re-ripping", "tracks": track_nums}
+
+
 @router.post("/jobs/{job_id}/re-rip/{track_num}")
 async def re_rip_track(
     job_id: str,
@@ -1137,29 +1160,6 @@ async def sync_group_metadata(
         "synced_count": synced,
         "fields": list(shared_updates.keys()),
     }
-
-
-@router.post("/jobs/{job_id}/re-rip/failed")
-async def re_rip_failed(
-    job_id: str,
-    session: AsyncSession = Depends(get_session),
-):
-    """Re-rip only failed tracks."""
-    failed = await session.execute(
-        select(Track)
-        .where(Track.job_id == job_id, Track.rip_status == "failed")
-    )
-    track_nums = [t.track_num for t in failed.scalars()]
-    if not track_nums:
-        return {"status": "no_failed_tracks"}
-
-    from backend.services.pipeline import run_re_rip_track
-    import asyncio
-
-    for num in track_nums:
-        asyncio.create_task(run_re_rip_track(job_id, num, None))
-
-    return {"status": "re-ripping", "tracks": track_nums}
 
 
 # ─────────────────── GnuDB submit ───────────────────
