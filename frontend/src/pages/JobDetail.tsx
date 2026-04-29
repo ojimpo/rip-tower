@@ -636,6 +636,23 @@ export default function JobDetail() {
             </div>
           </div>
 
+          {/* Job errored — offer full re-rip */}
+          {job.status === "error" && failedTracks.length === 0 && degradedTracks.length === 0 && (
+            <div className="mx-4 mb-3 rounded-lg bg-red-950/20 border border-red-500/20 px-3 py-3">
+              <p className="text-xs text-red-300 mb-2">
+                {"ジョブがエラーで停止しました"}
+                {job.error_message ? `: ${job.error_message}` : ""}
+              </p>
+              <button
+                onClick={() => reRipAllMutation.mutate()}
+                disabled={reRipAllMutation.isPending}
+                className="w-full text-xs font-medium py-2 rounded-lg bg-red-500/20 text-red-300 hover:bg-red-500/30 transition disabled:opacity-50"
+              >
+                {reRipAllMutation.isPending ? "..." : "全トラック再リップ"}
+              </button>
+            </div>
+          )}
+
           {/* Failed tracks action */}
           {(failedTracks.length > 0 || degradedTracks.length > 0) && (
             <div className="mx-4 mb-3 rounded-lg bg-red-950/20 border border-red-500/20 px-3 py-3">

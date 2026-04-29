@@ -34,6 +34,10 @@ async def lifespan(app: FastAPI):
     # Ensure incoming dir exists
     Path(config.output.incoming_dir).mkdir(parents=True, exist_ok=True)
 
+    # Recover orphaned jobs: anything in an in-progress state at startup
+    # has no live task driving it (the previous process is gone).
+    await _recover_orphan_jobs()
+
     # Start drive monitor
     from backend.services.drive_monitor import start_monitoring
 
@@ -43,6 +47,32 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Rip Tower shutting down")
+
+
+async def _recover_orphan_jobs() -> None:
+    from sqlalchemy import select
+
+    from backend.database import async_session
+    from backend.models import Job
+
+    active_states = ("pending", "identifying", "ripping", "encoding", "finalizing")
+    async with async_session() as session:
+        result = await session.execute(
+            select(Job).where(Job.status.in_(active_states))
+        )
+        orphans = list(result.scalars())
+        for job in orphans:
+            previous = job.status
+            logger.warning(
+                "Recovering orphaned job %s (was %s) → error", job.id, previous
+            )
+            job.status = "error"
+            if not job.error_message:
+                job.error_message = (
+                    f"Process interrupted (was '{previous}' at startup); please re-rip."
+                )
+        if orphans:
+            await session.commit()
 
 
 app = FastAPI(
