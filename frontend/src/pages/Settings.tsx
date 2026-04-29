@@ -350,6 +350,15 @@ export default function Settings() {
                     className="w-full bg-[#0f0f1a] border border-white/8 rounded-lg px-3 py-2 text-sm text-gray-200 outline-none focus:border-[#e94560]"
                   />
                 </div>
+                <div className="col-span-2">
+                  <PlexScanButton
+                    disabled={
+                      !cfg.integrations.plex_url
+                      || !cfg.integrations.plex_token
+                      || cfg.integrations.plex_section_id == null
+                    }
+                  />
+                </div>
               </div>
             </div>
             <div className="pt-2 border-t border-white/5">
@@ -567,6 +576,51 @@ export default function Settings() {
     </div>
   );
 }
+
+function PlexScanButton({ disabled }: { disabled: boolean }) {
+  const [status, setStatus] = useState<"idle" | "scanning" | "ok" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const trigger = useMutation({
+    mutationFn: () => api.triggerPlexScan(),
+    onSuccess: () => {
+      setStatus("ok");
+      setError(null);
+      setTimeout(() => setStatus("idle"), 2000);
+    },
+    onError: (e: Error) => {
+      setStatus("error");
+      setError(e.message);
+      setTimeout(() => setStatus("idle"), 3000);
+    },
+  });
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          setStatus("scanning");
+          trigger.mutate();
+        }}
+        disabled={disabled || trigger.isPending}
+        className="w-full text-xs font-medium py-2 rounded-lg bg-purple-500/15 text-purple-300 hover:bg-purple-500/25 active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {status === "scanning" ? "スキャン中..." : "Plex ライブラリをスキャン"}
+      </button>
+      {status === "ok" && (
+        <p className="text-[10px] text-emerald-400 mt-1.5">スキャンを依頼しました</p>
+      )}
+      {status === "error" && (
+        <p className="text-[10px] text-red-400 mt-1.5">{error || "失敗しました"}</p>
+      )}
+      {disabled && (
+        <p className="text-[10px] text-gray-600 mt-1.5">URL/Token/Section ID を設定してください</p>
+      )}
+    </div>
+  );
+}
+
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

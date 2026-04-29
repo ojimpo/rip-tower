@@ -169,6 +169,9 @@ export const api = {
   updateSettings: (body: Record<string, unknown>) =>
     request("/settings", { method: "PUT", body: JSON.stringify(body) }),
 
+  // Plex
+  triggerPlexScan: () => request("/plex/scan", { method: "POST" }),
+
   // GnuDB submit
   gnudbHistory: (jobId: string) => request(`/jobs/${jobId}/gnudb`),
   gnudbPreview: (jobId: string, category?: string | null) =>
