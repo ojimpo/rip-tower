@@ -47,8 +47,9 @@ async def rip_disc(job_id: str, drive_id: str, identity) -> None:
         )
         tracks = tracks.scalars().all()
 
+    total = identity.audio_track_count or len(tracks) or identity.track_count
     for track in tracks:
-        await _rip_track(job_id, track.track_num, dev_path, output_dir, identity.track_count)
+        await _rip_track(job_id, track.track_num, dev_path, output_dir, total)
 
 
 async def _rip_track(

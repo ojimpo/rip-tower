@@ -26,11 +26,52 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DiscIdentity:
     disc_id: str
-    track_count: int
+    track_count: int          # full TOC count from cd-discid (includes data session)
+    audio_track_count: int    # audio-only count from cdparanoia -Q
     offsets: list[int]
     leadout: int
     toc_hash: str
     total_seconds: int
+
+
+async def _read_audio_track_count(dev_path: str) -> int | None:
+    """Detect the number of audio tracks via cdparanoia -Q.
+
+    cd-discid reports the full TOC (audio + data sessions), but cd-paranoia
+    and cdda2wav can only rip audio. On CD-Extra discs the trailing data
+    track makes it into Track rows under cd-discid's count and then fails
+    every rip attempt. cdparanoia -Q lists only audio tracks, so we use it
+    to learn how many Track rows to create.
+
+    Returns None on failure — caller should fall back to the full count.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "cd-paranoia", "-d", dev_path, "-Q",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "cd-paranoia -Q failed for %s: %s",
+            dev_path, stderr.decode("utf-8", "replace").strip()[:200],
+        )
+        return None
+
+    # cd-paranoia writes the audio track table to stderr, not stdout. Each
+    # data row begins with "  N." where N is the track number; the table is
+    # bracketed by "===" rules.
+    import re
+
+    output = (stderr or b"").decode("utf-8", "replace") + (stdout or b"").decode("utf-8", "replace")
+    nums = []
+    for line in output.splitlines():
+        m = re.match(r"\s*(\d+)\.\s+\d+\s+\[", line)
+        if m:
+            nums.append(int(m.group(1)))
+    if not nums:
+        return None
+    return max(nums)
 
 
 async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
@@ -73,6 +114,17 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
     # leadout from cd-discid is already in seconds
     total_seconds = leadout
 
+    # Detect audio-only count so CD-Extra data tracks aren't created as
+    # Track rows (which would fail every rip attempt).
+    audio_track_count = await _read_audio_track_count(dev_path)
+    if audio_track_count is None or audio_track_count > track_count:
+        audio_track_count = track_count
+    if audio_track_count < track_count:
+        logger.info(
+            "Detected CD-Extra: %d total tracks, %d audio tracks",
+            track_count, audio_track_count,
+        )
+
     # Update job and create track records
     async with async_session() as session:
         job = await session.get(Job, job_id)
@@ -83,7 +135,7 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
             job.disc_offsets = json.dumps(offsets)
             job.disc_leadout = leadout
 
-        for i in range(1, track_count + 1):
+        for i in range(1, audio_track_count + 1):
             track = Track(
                 job_id=job_id,
                 track_num=i,
@@ -97,12 +149,16 @@ async def read_disc(drive_id: str, job_id: str) -> DiscIdentity:
     identity = DiscIdentity(
         disc_id=disc_id,
         track_count=track_count,
+        audio_track_count=audio_track_count,
         offsets=offsets,
         leadout=leadout,
         toc_hash=toc_hash,
         total_seconds=total_seconds,
     )
-    logger.info("Disc identified: %s (%d tracks)", disc_id, track_count)
+    logger.info(
+        "Disc identified: %s (%d tracks, %d audio)",
+        disc_id, track_count, audio_track_count,
+    )
     return identity
 
 
@@ -142,15 +198,23 @@ async def read_disc_identity_only(drive_id: str) -> DiscIdentity:
     toc_hash = hashlib.sha256(raw.encode()).hexdigest()
     total_seconds = leadout
 
+    audio_track_count = await _read_audio_track_count(dev_path)
+    if audio_track_count is None or audio_track_count > track_count:
+        audio_track_count = track_count
+
     identity = DiscIdentity(
         disc_id=disc_id,
         track_count=track_count,
+        audio_track_count=audio_track_count,
         offsets=offsets,
         leadout=leadout,
         toc_hash=toc_hash,
         total_seconds=total_seconds,
     )
-    logger.info("Disc identity read: %s (%d tracks)", disc_id, track_count)
+    logger.info(
+        "Disc identity read: %s (%d tracks, %d audio)",
+        disc_id, track_count, audio_track_count,
+    )
     return identity
 
 
@@ -181,6 +245,7 @@ async def restore_identity(job_id: str) -> DiscIdentity | None:
     identity = DiscIdentity(
         disc_id=job.disc_id,
         track_count=track_count,
+        audio_track_count=track_count,
         offsets=offsets,
         leadout=job.disc_leadout or 0,
         toc_hash=job.toc_hash or "",
