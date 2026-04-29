@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -11,6 +12,17 @@ DATABASE_PATH = DATA_DIR / "rip-tower.db"
 DATABASE_URL = f"sqlite+aiosqlite:///{DATABASE_PATH}"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=10000")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
+
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
