@@ -113,9 +113,11 @@ async def _rip_track(
             track_num, attempt, len(strategies), tool_name,
         )
 
+        from backend.services.pipeline import spawn_tracked, unregister_proc
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
+            proc = await spawn_tracked(
+                job_id, *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -131,6 +133,8 @@ async def _rip_track(
                     pass
                 wav_path.unlink(missing_ok=True)
                 continue
+            finally:
+                unregister_proc(job_id, proc)
 
             if proc.returncode == 0 and wav_path.exists() and wav_path.stat().st_size > 0:
                 degraded = attempt > 1

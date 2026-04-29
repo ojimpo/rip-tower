@@ -20,11 +20,82 @@ logger = logging.getLogger(__name__)
 # Per-device locks to prevent concurrent access to the same drive
 _device_locks: dict[str, asyncio.Lock] = {}
 
+# Live registries used by the abort endpoint. Tasks let us cancel the
+# orchestration coroutine; processes let us kill long-running subprocesses
+# (cd-paranoia, ffmpeg) so abort takes effect within seconds rather than
+# waiting for them to finish naturally.
+_active_tasks: dict[str, asyncio.Task] = {}
+_active_procs: dict[str, set[asyncio.subprocess.Process]] = {}
+
 
 def _get_device_lock(drive_id: str) -> asyncio.Lock:
     if drive_id not in _device_locks:
         _device_locks[drive_id] = asyncio.Lock()
     return _device_locks[drive_id]
+
+
+def register_task(job_id: str, task: asyncio.Task) -> None:
+    """Register a job's orchestration task and clean up on completion."""
+    _active_tasks[job_id] = task
+
+    def _cleanup(_t: asyncio.Task) -> None:
+        if _active_tasks.get(job_id) is task:
+            _active_tasks.pop(job_id, None)
+        _active_procs.pop(job_id, None)
+
+    task.add_done_callback(_cleanup)
+
+
+def register_proc(job_id: str, proc: asyncio.subprocess.Process) -> None:
+    _active_procs.setdefault(job_id, set()).add(proc)
+
+
+def unregister_proc(job_id: str, proc: asyncio.subprocess.Process) -> None:
+    procs = _active_procs.get(job_id)
+    if procs:
+        procs.discard(proc)
+        if not procs:
+            _active_procs.pop(job_id, None)
+
+
+async def spawn_tracked(
+    job_id: str, *cmd: str, **kwargs: Any
+) -> asyncio.subprocess.Process:
+    """asyncio.create_subprocess_exec, but registered against a job for abort."""
+    proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+    register_proc(job_id, proc)
+    return proc
+
+
+def is_active(job_id: str) -> bool:
+    task = _active_tasks.get(job_id)
+    return bool(task) and not task.done()
+
+
+async def abort_job(job_id: str) -> bool:
+    """Kill any in-flight subprocesses and cancel the orchestration task.
+
+    Returns True if there was an active task to abort.
+    """
+    procs = list(_active_procs.get(job_id, ()))
+    for proc in procs:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.exception("Failed to kill proc for job %s", job_id)
+
+    task = _active_tasks.get(job_id)
+    if not task or task.done():
+        return False
+
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+    return True
 
 
 async def _update_status(job_id: str, status: str, error: str | None = None) -> None:
@@ -90,6 +161,11 @@ async def run_pipeline(job_id: str, request: RipRequest) -> None:
             # 4. Check auto-approve
             await _check_approval(job_id)
 
+    except asyncio.CancelledError:
+        logger.info("Pipeline cancelled for job %s", job_id)
+        await _update_status(job_id, "error", "Cancelled by user")
+        await broadcast("job:error", {"job_id": job_id, "message": "Cancelled by user"})
+        raise
     except Exception as e:
         logger.exception("Pipeline failed for job %s", job_id)
         await _update_status(job_id, "error", str(e))
@@ -297,6 +373,11 @@ async def run_re_rip(job_id: str, drive_id: str | None = None) -> None:
             # 9. Check approval
             await _check_approval(job_id)
 
+    except asyncio.CancelledError:
+        logger.info("Re-rip cancelled for job %s", job_id)
+        await _update_status(job_id, "error", "Cancelled by user")
+        await broadcast("job:error", {"job_id": job_id, "message": "Cancelled by user"})
+        raise
     except Exception as e:
         logger.exception("Re-rip failed for job %s", job_id)
         await _update_status(job_id, "error", str(e))
@@ -363,6 +444,11 @@ async def run_re_rip_track(
 
         await encode_all(job_id)
 
+    except asyncio.CancelledError:
+        logger.info("Re-rip track cancelled for job %s", job_id)
+        await _update_status(job_id, "error", "Cancelled by user")
+        await broadcast("job:error", {"job_id": job_id, "message": "Cancelled by user"})
+        raise
     except Exception as e:
         logger.exception("Re-rip track %d failed for job %s", track_num, job_id)
         await _update_status(job_id, "error", str(e))

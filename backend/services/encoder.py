@@ -136,12 +136,17 @@ async def _encode_track(
     cmd = _build_encode_cmd(fmt, quality, wav_path, output_path)
 
     if cmd:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
+        from backend.services.pipeline import spawn_tracked, unregister_proc
+
+        proc = await spawn_tracked(
+            job_id, *cmd,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
+        try:
+            _, stderr = await proc.communicate()
+        finally:
+            unregister_proc(job_id, proc)
 
         if proc.returncode != 0:
             logger.error("Encoding failed for track %d: %s", track.track_num, stderr.decode()[:200])

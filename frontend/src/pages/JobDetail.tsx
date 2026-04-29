@@ -31,6 +31,7 @@ export default function JobDetail() {
   const [groupSectionOpen, setGroupSectionOpen] = useState(false);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [abortDialogOpen, setAbortDialogOpen] = useState(false);
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -224,6 +225,15 @@ export default function JobDetail() {
     },
   });
 
+  const abortJobMutation = useMutation({
+    mutationFn: () => api.abortJob(jobId),
+    onSuccess: () => {
+      invalidateJob();
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      setAbortDialogOpen(false);
+    },
+  });
+
   if (isLoading) return <div className="p-4 text-gray-400">{"\u8AAD\u307F\u8FBC\u307F\u4E2D"}...</div>;
   if (error) return <div className="p-4 text-red-400">{"\u30A8\u30E9\u30FC"}: {(error as Error).message}</div>;
   if (!data) return null;
@@ -273,6 +283,17 @@ export default function JobDetail() {
           <span className={`text-xs font-medium px-2 py-1 rounded-full ${statusBadgeColor()}`}>
             {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
           </span>
+          {(["pending", "identifying", "ripping", "encoding", "finalizing", "resolving"].includes(job.status)) && (
+            <button
+              onClick={() => setAbortDialogOpen(true)}
+              className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition text-gray-400 hover:text-amber-400"
+              title={"中止"}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 9h6v6H9z M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          )}
           {(job.status === "error" || job.status === "complete") && (
             <button
               onClick={() => setDeleteDialogOpen(true)}
@@ -1135,6 +1156,49 @@ export default function JobDetail() {
           </button>
         </div>
       )}
+      {/* Abort Confirmation Dialog */}
+      {abortDialogOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => !abortJobMutation.isPending && setAbortDialogOpen(false)}
+        >
+          <div
+            className="w-full max-w-md bg-[#16213e] rounded-t-2xl sm:rounded-2xl border border-white/10 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-base font-bold text-amber-300">{"進行中のジョブを中止"}</h3>
+              <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+                {"進行中のリッピング/エンコードを中止します。実行中のサブプロセスを kill し、ジョブを error 状態にします。"}
+                <br />
+                {"中止後は通常の再リップ操作で復旧できます。"}
+              </p>
+            </div>
+            {abortJobMutation.isError && (
+              <p className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+                {(abortJobMutation.error as Error).message}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setAbortDialogOpen(false)}
+                disabled={abortJobMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl bg-white/5 border border-white/10 text-sm text-gray-300 hover:bg-white/10 transition disabled:opacity-50"
+              >
+                {"キャンセル"}
+              </button>
+              <button
+                onClick={() => abortJobMutation.mutate()}
+                disabled={abortJobMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-sm font-bold text-white transition disabled:opacity-50"
+              >
+                {abortJobMutation.isPending ? "中止中..." : "中止する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Confirmation Dialog */}
       {deleteDialogOpen && (
         <div

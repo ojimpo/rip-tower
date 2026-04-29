@@ -68,10 +68,11 @@ async def start_rip(
     await session.commit()
 
     # Trigger pipeline in background
-    from backend.services.pipeline import run_pipeline
+    from backend.services.pipeline import run_pipeline, register_task
     import asyncio
 
-    asyncio.create_task(run_pipeline(job_id, request))
+    task = asyncio.create_task(run_pipeline(job_id, request))
+    register_task(job_id, task)
 
     return JobResponse(
         job_id=job_id,
@@ -128,14 +129,15 @@ async def import_wav(
     await session.commit()
 
     # Trigger metadata resolution
-    from backend.services.pipeline import run_resolve_only
+    from backend.services.pipeline import run_resolve_only, register_task
     import asyncio
 
-    asyncio.create_task(run_resolve_only(job_id, {
+    task = asyncio.create_task(run_resolve_only(job_id, {
         "artist": artist_hint,
         "title": title_hint,
         "catalog": catalog_hint,
     }))
+    register_task(job_id, task)
 
     return JobResponse(
         job_id=job_id,
@@ -645,6 +647,38 @@ async def re_resolve(
     return {"status": "re-resolving"}
 
 
+_ACTIVE_STATUSES = {"pending", "identifying", "ripping", "encoding", "finalizing", "resolving"}
+
+
+@router.post("/jobs/{job_id}/abort")
+async def abort_running_job(
+    job_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Abort an in-flight job: kill subprocesses, cancel orchestration, mark error."""
+    job = await session.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in _ACTIVE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job is in '{job.status}', not abortable",
+        )
+
+    from backend.services.pipeline import abort_job
+
+    aborted = await abort_job(job_id)
+
+    # Re-fetch in case the cancellation handler already wrote 'error'.
+    await session.refresh(job)
+    if job.status not in ("error", "complete", "review"):
+        job.status = "error"
+        job.error_message = job.error_message or "Cancelled by user"
+        await session.commit()
+
+    return {"status": "aborted", "had_active_task": aborted}
+
+
 @router.post("/jobs/{job_id}/re-rip")
 async def re_rip(
     job_id: str,
@@ -656,10 +690,11 @@ async def re_rip(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    from backend.services.pipeline import run_re_rip
+    from backend.services.pipeline import run_re_rip, register_task
     import asyncio
 
-    asyncio.create_task(run_re_rip(job_id, drive_id))
+    task = asyncio.create_task(run_re_rip(job_id, drive_id))
+    register_task(job_id, task)
     return {"status": "re-ripping"}
 
 
@@ -677,11 +712,15 @@ async def re_rip_failed(
     if not track_nums:
         return {"status": "no_failed_tracks"}
 
-    from backend.services.pipeline import run_re_rip_track
+    from backend.services.pipeline import run_re_rip_track, register_task
     import asyncio
 
-    for num in track_nums:
-        asyncio.create_task(run_re_rip_track(job_id, num, None))
+    # Register only the first task — the others share the same job_id and the
+    # last-write-wins behavior is fine since abort is meant for runaway jobs.
+    for i, num in enumerate(track_nums):
+        task = asyncio.create_task(run_re_rip_track(job_id, num, None))
+        if i == 0:
+            register_task(job_id, task)
 
     return {"status": "re-ripping", "tracks": track_nums}
 
@@ -698,10 +737,11 @@ async def re_rip_track(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    from backend.services.pipeline import run_re_rip_track
+    from backend.services.pipeline import run_re_rip_track, register_task
     import asyncio
 
-    asyncio.create_task(run_re_rip_track(job_id, track_num, drive_id))
+    task = asyncio.create_task(run_re_rip_track(job_id, track_num, drive_id))
+    register_task(job_id, task)
     return {"status": "re-ripping"}
 
 

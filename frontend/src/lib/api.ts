@@ -97,6 +97,8 @@ export const api = {
   // Re-rip
   reRip: (jobId: string) =>
     request(`/jobs/${jobId}/re-rip`, { method: "POST" }),
+  abortJob: (jobId: string) =>
+    request(`/jobs/${jobId}/abort`, { method: "POST" }),
   reRipTrack: (jobId: string, trackNum: number) =>
     request(`/jobs/${jobId}/re-rip/${trackNum}`, { method: "POST" }),
   reRipFailed: (jobId: string) =>
