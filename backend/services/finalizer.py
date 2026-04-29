@@ -124,6 +124,14 @@ async def finalize(job_id: str) -> None:
 
         shutil.move(str(src), str(dst))
 
+        # Re-tag FLAC at finalize time. encode-time tagging is skipped when
+        # JobMetadata is empty (early in the pipeline), so this is the last
+        # chance to ensure tags reflect the resolved metadata before the file
+        # leaves incoming.
+        if ext == ".flac":
+            from backend.services.encoder import _tag_flac
+            await _tag_flac(dst, track, meta)
+
         # Embed artwork in FLAC
         if artwork and artwork.local_path and ext == ".flac":
             await _embed_artwork(dst, Path(artwork.local_path))
@@ -298,6 +306,9 @@ async def reapply_metadata(job_id: str) -> None:
         if j:
             j.output_dir = str(target_dir)
             await session.commit()
+
+    # Refresh Plex so post-complete edits propagate to the library view.
+    await _plex_refresh()
 
     logger.info("Re-applied metadata for job %s → %s", job_id, target_dir)
 
