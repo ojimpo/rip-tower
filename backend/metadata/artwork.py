@@ -205,8 +205,8 @@ async def _fetch_itunes_artwork(
                     for r in data.get("results", []):
                         r_artist = r.get("artistName", "")
                         r_album = r.get("collectionName", "")
-                        if (similarity(artist, r_artist) >= 0.6
-                                and similarity(album, r_album) >= 0.6):
+                        if (similarity(artist, r_artist) >= 0.85
+                                and similarity(album, r_album) >= 0.85):
                             url = (r.get("artworkUrl100") or "").replace(
                                 "100x100", "600x600"
                             )
@@ -267,8 +267,8 @@ async def _fetch_discogs_artwork(job_id: str, artist: str, album: str) -> None:
                 parts = r_title.split(" - ", 1)
                 r_artist = parts[0] if parts else ""
                 r_album = parts[1] if len(parts) > 1 else ""
-                if (similarity(artist, r_artist) >= 0.6
-                        and similarity(album, r_album) >= 0.6):
+                if (similarity(artist, r_artist) >= 0.85
+                        and similarity(album, r_album) >= 0.85):
                     cover_url = r.get("cover_image") or r.get("thumb")
                     break
 
@@ -338,7 +338,12 @@ async def _save_artwork(
 
 
 async def _auto_select_best(job_id: str) -> None:
-    """Auto-select the highest resolution artwork."""
+    """Auto-select the most trustworthy artwork.
+
+    Order: manual upload > Cover Art Archive > Discogs > iTunes, with image
+    resolution as a tiebreak. CAA only fires when MusicBrainz matched the disc
+    by ID, so it is the most reliable text-search-free source.
+    """
     from sqlalchemy import select
 
     async with async_session() as session:
@@ -350,12 +355,16 @@ async def _auto_select_best(job_id: str) -> None:
         if not artworks:
             return
 
-        # Prefer highest resolution (width * height), with source priority as tiebreak
-        source_priority = {"cover_art_archive": 3, "discogs": 2, "itunes": 1}
+        source_priority = {
+            "manual": 4,
+            "cover_art_archive": 3,
+            "discogs": 2,
+            "itunes": 1,
+        }
         artworks.sort(
             key=lambda a: (
-                (a.width or 0) * (a.height or 0),
                 source_priority.get(a.source, 0),
+                (a.width or 0) * (a.height or 0),
             ),
             reverse=True,
         )
