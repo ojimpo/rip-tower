@@ -602,7 +602,30 @@ async def trash_conflicts(
             meta.needs_review = (meta.confidence or 0) < config.general.auto_approve_threshold
     await session.commit()
 
-    return {"status": "trashed", "moved": moved, "trash_label": label}
+    # If the user already approved before the conflict bounced it back to
+    # review, trashing the conflict expresses intent to proceed. Auto-kick
+    # finalize so the user doesn't have to re-press approve.
+    auto_finalized = False
+    if (
+        meta.approved
+        and job.status == "review"
+        and not (issues and "existing_files" in issues)
+    ):
+        job.status = "finalizing"
+        await session.commit()
+
+        from backend.services.pipeline import run_finalize
+        import asyncio
+
+        asyncio.create_task(run_finalize(job_id))
+        auto_finalized = True
+
+    return {
+        "status": "trashed",
+        "moved": moved,
+        "trash_label": label,
+        "auto_finalized": auto_finalized,
+    }
 
 
 @router.post("/jobs/{job_id}/metadata/re-resolve")
