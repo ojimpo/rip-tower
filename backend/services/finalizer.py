@@ -25,8 +25,13 @@ def safe_dirname(s: str) -> str:
     return s.replace("/", "-").replace("\\", "-").replace(":", " -").replace("\0", "")
 
 
-async def finalize(job_id: str) -> None:
-    """Move encoded files to the music library, embed artwork, refresh Plex."""
+async def finalize(job_id: str) -> bool:
+    """Move encoded files to the music library, embed artwork, refresh Plex.
+
+    Returns True on full success, False when the job was bounced back to
+    review (e.g. an existing-files conflict was detected). Callers must
+    not transition the job to ``complete`` when False is returned.
+    """
     config = get_config()
 
     async with async_session() as session:
@@ -94,7 +99,7 @@ async def finalize(job_id: str) -> None:
                 "reason": f"existing audio files in {output_dir}",
                 "existing_files": [str(f) for f in existing],
             })
-        return
+        return False
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -170,6 +175,7 @@ async def finalize(job_id: str) -> None:
     await _plex_refresh()
 
     logger.info("Finalized job %s → %s", job_id, output_dir)
+    return True
 
 
 def _archive_artifacts(album_dir: Path) -> bool:

@@ -198,7 +198,13 @@ async def run_finalize(job_id: str) -> None:
         await _update_status(job_id, "finalizing")
         from backend.services.finalizer import finalize, update_kashidashi
 
-        await finalize(job_id)
+        succeeded = await finalize(job_id)
+        if not succeeded:
+            # finalize() bounced the job back to review (e.g. existing files
+            # conflict). It already set status=review and broadcast job:review;
+            # don't overwrite that with complete.
+            return
+
         await _update_status(job_id, "complete")
         await update_kashidashi(job_id)
         await broadcast("job:complete", {"job_id": job_id})
