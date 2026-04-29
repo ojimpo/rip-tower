@@ -1,5 +1,7 @@
 """SQLAlchemy ORM models."""
 
+import secrets
+import string
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -18,6 +20,21 @@ from backend.database import Base
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_SHORT_ID_ALPHABET = string.ascii_lowercase + string.digits  # url-friendly, no homoglyphs from caps
+_SHORT_ID_LENGTH = 8
+
+
+def generate_short_id() -> str:
+    """Generate a URL-friendly short ID for new jobs.
+
+    8 chars from [a-z0-9] = 36^8 ≈ 2.8T variants. Collisions inside a single
+    tower are vanishingly rare; the primary-key constraint will reject any
+    coincidence. Existing jobs keep their UUIDs and continue to work because
+    Job.id is text-typed.
+    """
+    return "".join(secrets.choice(_SHORT_ID_ALPHABET) for _ in range(_SHORT_ID_LENGTH))
 
 
 class Drive(Base):

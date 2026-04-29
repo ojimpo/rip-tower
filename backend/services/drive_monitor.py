@@ -248,13 +248,12 @@ async def start_monitoring() -> None:
 
 async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
     """Create and start a rip job for auto-rip."""
-    import uuid
     from backend.database import async_session
-    from backend.models import Job
+    from backend.models import Job, generate_short_id
     from backend.schemas import RipRequest
-    from backend.services.pipeline import run_pipeline
+    from backend.services.pipeline import register_task, run_pipeline
 
-    job_id = str(uuid.uuid4())
+    job_id = generate_short_id()
     async with async_session() as session:
         job = Job(
             id=job_id,
@@ -266,7 +265,8 @@ async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
         await session.commit()
 
     request = RipRequest(drive_id=drive_id, source_type=source_type)
-    asyncio.create_task(run_pipeline(job_id, request))
+    task = asyncio.create_task(run_pipeline(job_id, request))
+    register_task(job_id, task)
     logger.info("Auto-rip job %s created for drive %s", job_id, drive_id)
 
 

@@ -21,7 +21,16 @@ def _utc_iso(dt: datetime | None) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
-from backend.models import Drive, Job, JobMetadata, Track, MetadataCandidate, Artwork, KashidashiCandidate
+from backend.models import (
+    Artwork,
+    Drive,
+    Job,
+    JobMetadata,
+    KashidashiCandidate,
+    MetadataCandidate,
+    Track,
+    generate_short_id,
+)
 from backend.schemas import (
     JobResponse,
     JobDetailResponse,
@@ -42,7 +51,7 @@ async def start_rip(
     session: AsyncSession = Depends(get_session),
 ):
     """Start a new ripping job."""
-    job_id = str(uuid.uuid4())
+    job_id = generate_short_id()
     album_group = request.album_group or (
         str(uuid.uuid4()) if request.total_discs and request.total_discs > 1 else None
     )
@@ -95,7 +104,7 @@ async def import_wav(
     session: AsyncSession = Depends(get_session),
 ):
     """Import WAV files as a new job (skips identifying/ripping)."""
-    job_id = str(uuid.uuid4())
+    job_id = generate_short_id()
 
     job = Job(
         id=job_id,
