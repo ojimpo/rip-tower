@@ -380,8 +380,15 @@ async def _auto_match_album_group(job_id: str) -> None:
                 if gm.disc_number and gm.disc_number > 0:
                     used_numbers.add(gm.disc_number)
             meta.total_discs = group_size
-            # Assign disc_number if not set
-            if not meta.disc_number or meta.disc_number < 1:
+            # Assign disc_number if missing OR if it collides with a sibling.
+            # MusicBrainz returns disc_number=1 by default when it can't tell
+            # which medium a disc actually is, so two siblings can both arrive
+            # tagged as disc 1; the later arrival gets bumped to the next slot.
+            if (
+                not meta.disc_number
+                or meta.disc_number < 1
+                or meta.disc_number in used_numbers
+            ):
                 next_num = 1
                 while next_num in used_numbers:
                     next_num += 1
@@ -414,23 +421,26 @@ async def _auto_match_album_group(job_id: str) -> None:
 
         group_id = str(uuid.uuid4())
 
-        # Sort by disc_number if available, else by creation time
+        # Sort by disc_number then created_at — when two jobs both claim the
+        # same disc_number (MB defaults ambiguous matches to disc 1), the
+        # older job wins the slot and the newer one is reassigned below.
         all_matched.sort(
             key=lambda jm: (jm[1].disc_number or 999, jm[0].created_at)
         )
 
-        # Assign disc numbers sequentially for jobs that don't have one
-        used_numbers = {m.disc_number for _, m in all_matched if m.disc_number and m.disc_number > 0}
-        next_num = 1
+        # Walk in order, claiming disc_number slots. First arrival keeps its
+        # claim; collisions and unset numbers get the next free slot.
+        claimed: set[int] = set()
         for matched_job, matched_meta in all_matched:
             matched_job.album_group = group_id
             matched_meta.total_discs = len(all_matched)
-            if not matched_meta.disc_number or matched_meta.disc_number < 1:
-                while next_num in used_numbers:
-                    next_num += 1
-                matched_meta.disc_number = next_num
-                used_numbers.add(next_num)
-                next_num += 1
+            cur = matched_meta.disc_number
+            if not cur or cur < 1 or cur in claimed:
+                cur = 1
+                while cur in claimed:
+                    cur += 1
+                matched_meta.disc_number = cur
+            claimed.add(cur)
 
         await session.commit()
 
