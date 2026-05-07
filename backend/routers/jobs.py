@@ -724,9 +724,11 @@ async def re_rip(
 @router.post("/jobs/{job_id}/re-rip/failed")
 async def re_rip_failed(
     job_id: str,
+    drive_id: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """Re-rip only failed tracks."""
+    """Re-rip only failed tracks. drive_id may be passed to retry on a
+    different drive when the disc has been physically moved."""
     failed = await session.execute(
         select(Track)
         .where(Track.job_id == job_id, Track.rip_status == "failed")
@@ -741,11 +743,11 @@ async def re_rip_failed(
     # Register only the first task — the others share the same job_id and the
     # last-write-wins behavior is fine since abort is meant for runaway jobs.
     for i, num in enumerate(track_nums):
-        task = asyncio.create_task(run_re_rip_track(job_id, num, None))
+        task = asyncio.create_task(run_re_rip_track(job_id, num, drive_id))
         if i == 0:
             register_task(job_id, task)
 
-    return {"status": "re-ripping", "tracks": track_nums}
+    return {"status": "re-ripping", "tracks": track_nums, "drive_id": drive_id}
 
 
 @router.post("/jobs/{job_id}/re-rip/{track_num}")
