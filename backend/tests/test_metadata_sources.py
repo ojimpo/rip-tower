@@ -191,6 +191,56 @@ async def test_mb_text_search_fetches_tracks_for_top_releases(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mb_text_search_tiebreaks_same_track_count_by_duration(monkeypatch):
+    """A 2-disc set where both discs have the same track count must pick the
+    medium whose total duration is closest to the physical disc's leadout —
+    otherwise both discs of e.g. 中島みゆき's Singles I/II get tagged as disc 1.
+    """
+    from backend.metadata.sources import musicbrainz as mb_mod
+
+    # Both media have 10 tracks — only durations distinguish them.
+    # Disc 1: ~3120s total, Disc 2: ~3500s total.
+    disc1_tracks = [
+        {"recording": {"title": f"D1-{i}"}, "length": 312_000} for i in range(1, 11)
+    ]
+    disc2_tracks = [
+        {"recording": {"title": f"D2-{i}"}, "length": 350_000} for i in range(1, 11)
+    ]
+    search_resp = _Resp(200, {"releases": [
+        {
+            "id": "rel-x",
+            "title": "Singles II",
+            "artist-credit": [{"name": "Artist"}],
+            "media": [{"track-count": 10}, {"track-count": 10}],
+            "date": "1994",
+        },
+    ]})
+    detail_resp = _Resp(200, {
+        "title": "Singles II",
+        "media": [
+            {"format": "CD", "position": 1, "track-count": 10, "tracks": disc1_tracks},
+            {"format": "CD", "position": 2, "track-count": 10, "tracks": disc2_tracks},
+        ],
+    })
+    _patch_httpx(monkeypatch, mb_mod, {
+        "https://musicbrainz.org/ws/2/release/rel-x": detail_resp,
+        "https://musicbrainz.org/ws/2/release/": search_resp,
+    })
+
+    src = MusicBrainzSource(mode="text_search")
+    # Physical disc 2: leadout ~3502s — should match disc 2, not disc 1
+    identity = SimpleNamespace(disc_id=None, track_count=10, total_seconds=3502)
+    candidates = await src.search(
+        identity, hints={"title": "Singles II", "artist": "Artist"},
+    )
+
+    assert candidates
+    titles = json.loads(candidates[0]["track_titles"])
+    assert titles == [f"D2-{i}" for i in range(1, 11)]
+    assert candidates[0]["disc_number"] == 2
+
+
+@pytest.mark.asyncio
 async def test_mb_disc_id_mode_skips_text_search(monkeypatch):
     from backend.metadata.sources import musicbrainz as mb_mod
 

@@ -36,6 +36,7 @@ class MusicBrainzSource(MetadataSource):
     async def search(self, identity: Any, hints: dict | None = None) -> list[dict]:
         candidates = []
         track_count = identity.track_count if identity else 0
+        total_seconds = getattr(identity, "total_seconds", 0) if identity else 0
 
         if self.mode in ("both", "disc_id") and identity and identity.disc_id:
             results = await self._lookup_discid(identity.disc_id, track_count)
@@ -45,7 +46,7 @@ class MusicBrainzSource(MetadataSource):
             self.mode == "both" and not candidates and hints
         ):
             if hints:
-                results = await self._text_search(hints, track_count)
+                results = await self._text_search(hints, track_count, total_seconds)
                 candidates.extend(results)
 
         return candidates
@@ -126,7 +127,9 @@ class MusicBrainzSource(MetadataSource):
                 logger.exception("MusicBrainz disc ID lookup failed")
                 return []
 
-    async def _text_search(self, hints: dict, track_count: int = 0) -> list[dict]:
+    async def _text_search(
+        self, hints: dict, track_count: int = 0, total_seconds: int = 0,
+    ) -> list[dict]:
         query_parts = []
         catalog = hints.get("catalog", "")
         title = hints.get("title", "")
@@ -207,7 +210,8 @@ class MusicBrainzSource(MetadataSource):
                         r_artist = ac[0].get("name", "")
 
                     tracks, disc_number, total_discs = await self._fetch_tracks(
-                        client, r.get("id", ""), target_disc, track_count
+                        client, r.get("id", ""), target_disc, track_count,
+                        total_seconds,
                     )
                     if tracks and track_count and len(tracks) == track_count:
                         conf += 5
@@ -255,8 +259,15 @@ class MusicBrainzSource(MetadataSource):
         release_id: str,
         target_disc: int,
         track_count: int,
+        total_seconds: int = 0,
     ) -> tuple[list[str], int, int]:
-        """Fetch track listing for a release; pick the medium that matches track_count."""
+        """Fetch track listing for a release.
+
+        For multi-disc sets where multiple media share the same track count
+        (common for compilations like Singles I/II), tiebreak by total
+        duration — the medium whose summed track lengths are closest to the
+        physical disc's leadout time wins.
+        """
         if not release_id:
             return [], 1, 1
         await asyncio.sleep(RATE_LIMIT)
@@ -279,13 +290,31 @@ class MusicBrainzSource(MetadataSource):
         if not media:
             return [], 1, 1
 
-        # Pick medium: prefer track_count match, then target_disc, else first
+        def medium_seconds(m: dict) -> int:
+            ms = sum(t.get("length") or 0 for t in m.get("tracks", []))
+            return ms // 1000
+
+        # Pick medium: prefer track_count match (with duration tiebreak),
+        # then target_disc, else first.
         chosen = None
         if track_count:
-            for m in media:
-                if m.get("track-count") == track_count:
-                    chosen = m
-                    break
+            matching = [m for m in media if m.get("track-count") == track_count]
+            if len(matching) == 1:
+                chosen = matching[0]
+            elif matching:
+                if total_seconds > 0:
+                    # Closest by absolute duration delta (CD pre-gap accounts
+                    # for ~2s slack, but compilations can drift a few seconds)
+                    chosen = min(
+                        matching,
+                        key=lambda m: abs(medium_seconds(m) - total_seconds),
+                    )
+                else:
+                    # No duration signal — prefer the target_disc match if any
+                    chosen = next(
+                        (m for m in matching if m.get("position") == target_disc),
+                        matching[0],
+                    )
         if chosen is None:
             for m in media:
                 if m.get("position") == target_disc:
