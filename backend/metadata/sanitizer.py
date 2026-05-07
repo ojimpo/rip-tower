@@ -218,11 +218,15 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         # Create or update JobMetadata
         existing = await session.get(JobMetadata, job_id)
         if existing:
-            existing.artist = artist
-            existing.album = album
-            existing.album_base = album_base
-            existing.year = year
-            existing.genre = genre
+            # Don't blow away a known-good value with an empty string from a
+            # weaker source. Past re-resolves clobbered correct artist/album
+            # because CDDB returned empty stubs that ranked higher than the
+            # original MB candidate (which had failed on the second pass).
+            existing.artist = artist or existing.artist
+            existing.album = album or existing.album
+            existing.album_base = album_base or existing.album_base
+            existing.year = year if year is not None else existing.year
+            existing.genre = genre or existing.genre
             existing.disc_number = disc_number or existing.disc_number or 1
             # Priority: source > existing (user-set or prior) > inferred > 1
             existing.total_discs = (

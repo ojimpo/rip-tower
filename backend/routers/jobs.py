@@ -644,16 +644,30 @@ async def re_resolve(
     job_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Re-run metadata resolution with new hints."""
+    """Re-run metadata resolution. Seeds search hints from the existing
+    metadata so text-search sources (MB, iTunes, Discogs, HMV) keep working
+    when disc-ID lookups don't pan out — otherwise re-resolve would clobber
+    a known-good artist/album row with empty CDDB stubs."""
     job = await session.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    meta = await session.get(JobMetadata, job_id)
+    hints: dict = {}
+    if meta:
+        if meta.artist:
+            hints["artist"] = meta.artist
+        title = meta.album_base or meta.album
+        if title:
+            hints["title"] = title
+        if meta.disc_number and meta.disc_number > 0:
+            hints["disc_number"] = meta.disc_number
+
     from backend.services.pipeline import run_resolve_only
     import asyncio
 
-    asyncio.create_task(run_resolve_only(job_id, {}))
-    return {"status": "re-resolving"}
+    asyncio.create_task(run_resolve_only(job_id, hints))
+    return {"status": "re-resolving", "hints": hints}
 
 
 _ACTIVE_STATUSES = {"pending", "identifying", "ripping", "encoding", "finalizing", "resolving"}
