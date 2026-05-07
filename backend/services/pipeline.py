@@ -158,7 +158,28 @@ async def run_pipeline(job_id: str, request: RipRequest) -> None:
                     job.completed_at = datetime.now(timezone.utc)
                     await session.commit()
 
-            # 4. Check auto-approve
+            # 4. Bail to error if any tracks failed to rip — auto-progressing
+            # to review/finalize would publish a partial album. The user can
+            # hit /re-rip/failed to recover.
+            async with async_session() as session:
+                failed = await session.execute(
+                    select(Track).where(
+                        Track.job_id == job_id,
+                        Track.rip_status == "failed",
+                    )
+                )
+                failed_nums = sorted(t.track_num for t in failed.scalars())
+            if failed_nums:
+                msg = (
+                    f"{len(failed_nums)} track(s) failed to rip "
+                    f"(#{', #'.join(str(n) for n in failed_nums)}). "
+                    f"Tap re-rip to retry."
+                )
+                await _update_status(job_id, "error", msg)
+                await broadcast("job:error", {"job_id": job_id, "message": msg})
+                return
+
+            # 5. Check auto-approve
             await _check_approval(job_id)
 
     except asyncio.CancelledError:
