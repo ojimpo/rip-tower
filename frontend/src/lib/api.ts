@@ -68,6 +68,8 @@ export const api = {
     request(`/jobs/${jobId}/artworks/${artworkId}/select`, { method: "POST" }),
   uploadArtwork: (jobId: string, file: File) =>
     uploadFile(`/jobs/${jobId}/artworks/upload`, file),
+  deleteArtwork: (jobId: string, artworkId: number) =>
+    request(`/jobs/${jobId}/artworks/${artworkId}`, { method: "DELETE" }),
 
   // Lyrics
   fetchLyrics: (jobId: string, trackNum: number) =>

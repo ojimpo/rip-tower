@@ -945,6 +945,45 @@ async def select_artwork(
     return {"status": "selected"}
 
 
+@router.delete("/jobs/{job_id}/artworks/{artwork_id}")
+async def delete_artwork(
+    job_id: str,
+    artwork_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete an artwork candidate. If it was the selected one, promote
+    another remaining candidate so the job doesn't end up tagless."""
+    artwork = await session.get(Artwork, artwork_id)
+    if not artwork or artwork.job_id != job_id:
+        raise HTTPException(status_code=404, detail="Artwork not found")
+
+    was_selected = artwork.selected
+    local_path = artwork.local_path
+
+    await session.delete(artwork)
+    await session.flush()
+
+    if was_selected:
+        remaining = await session.execute(
+            select(Artwork)
+            .where(Artwork.job_id == job_id)
+            .order_by(Artwork.file_size.desc().nulls_last(), Artwork.id)
+        )
+        next_art = remaining.scalars().first()
+        if next_art:
+            next_art.selected = True
+
+    await session.commit()
+
+    if local_path:
+        try:
+            Path(local_path).unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not unlink artwork file %s: %s", local_path, e)
+
+    return {"status": "deleted", "was_selected": was_selected}
+
+
 @router.post("/jobs/{job_id}/kashidashi/re-match")
 async def re_match_kashidashi(
     job_id: str,

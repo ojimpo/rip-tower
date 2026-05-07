@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from backend.models import Drive, Job, JobMetadata
+from backend.models import Artwork, Drive, Job, JobMetadata
 
 
 class TestDrivesAPI:
@@ -176,3 +176,83 @@ class TestHistoryAPI:
         data = resp.json()
         assert data["items"] == []
         assert data["offset"] == 0
+
+
+class TestArtworkDelete:
+    """DELETE /api/jobs/{id}/artworks/{artwork_id}."""
+
+    @pytest.mark.asyncio
+    async def test_delete_unselected_artwork_removes_row(
+        self, client, db_session, tmp_path,
+    ):
+        db_session.add(Job(id="art-job", status="review", source_type="owned"))
+        f = tmp_path / "extra.jpg"
+        f.write_bytes(b"\xff\xd8\xff\xd9")
+        unselected = Artwork(
+            job_id="art-job", source="discogs",
+            local_path=str(f), selected=False,
+        )
+        selected = Artwork(
+            job_id="art-job", source="musicbrainz",
+            local_path=None, selected=True,
+        )
+        db_session.add_all([unselected, selected])
+        await db_session.commit()
+        await db_session.refresh(unselected)
+
+        resp = await client.delete(f"/api/jobs/art-job/artworks/{unselected.id}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "deleted"
+        assert body["was_selected"] is False
+        assert not f.exists()  # file unlinked
+
+        listed = await client.get("/api/jobs/art-job/artworks")
+        ids = [a["id"] for a in listed.json()]
+        assert unselected.id not in ids
+        assert selected.id in ids
+
+    @pytest.mark.asyncio
+    async def test_delete_selected_promotes_remaining(
+        self, client, db_session,
+    ):
+        db_session.add(Job(id="art-job-2", status="review", source_type="owned"))
+        sel = Artwork(job_id="art-job-2", source="musicbrainz", selected=True)
+        other = Artwork(
+            job_id="art-job-2", source="itunes",
+            file_size=1000, selected=False,
+        )
+        db_session.add_all([sel, other])
+        await db_session.commit()
+        await db_session.refresh(sel)
+        await db_session.refresh(other)
+
+        resp = await client.delete(f"/api/jobs/art-job-2/artworks/{sel.id}")
+        assert resp.status_code == 200
+        assert resp.json()["was_selected"] is True
+
+        # The remaining artwork should now be selected.
+        listed = await client.get("/api/jobs/art-job-2/artworks")
+        rows = listed.json()
+        assert len(rows) == 1
+        assert rows[0]["id"] == other.id
+        assert rows[0]["selected"] is True
+
+    @pytest.mark.asyncio
+    async def test_delete_unknown_returns_404(self, client, db_session):
+        db_session.add(Job(id="art-job-3", status="review", source_type="owned"))
+        await db_session.commit()
+        resp = await client.delete("/api/jobs/art-job-3/artworks/99999")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_delete_wrong_job_returns_404(self, client, db_session):
+        db_session.add(Job(id="art-job-4", status="review", source_type="owned"))
+        db_session.add(Job(id="art-job-5", status="review", source_type="owned"))
+        a = Artwork(job_id="art-job-4", source="musicbrainz", selected=True)
+        db_session.add(a)
+        await db_session.commit()
+        await db_session.refresh(a)
+        # Same artwork id but wrong job
+        resp = await client.delete(f"/api/jobs/art-job-5/artworks/{a.id}")
+        assert resp.status_code == 404
