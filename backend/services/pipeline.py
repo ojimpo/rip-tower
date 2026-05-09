@@ -465,6 +465,25 @@ async def run_re_rip_track(
 
         await encode_all(job_id)
 
+        # 6. If no tracks remain in failed state, push the job back through
+        # approval. Without this, an error-state job whose failed track was
+        # just re-ripped successfully would stay stuck in 'error'.
+        async with async_session() as session:
+            still_failed = await session.execute(
+                select(Track).where(
+                    Track.job_id == job_id, Track.rip_status == "failed",
+                )
+            )
+            still_failed_tracks = still_failed.scalars().all()
+            job = await session.get(Job, job_id)
+        if not still_failed_tracks and job and job.status == "error":
+            async with async_session() as session:
+                j = await session.get(Job, job_id)
+                if j:
+                    j.error_message = None
+                    await session.commit()
+            await _check_approval(job_id)
+
     except asyncio.CancelledError:
         logger.info("Re-rip track cancelled for job %s", job_id)
         await _update_status(job_id, "error", "Cancelled by user")
