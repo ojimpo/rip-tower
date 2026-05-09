@@ -108,6 +108,11 @@ async def _update_status(job_id: str, status: str, error: str | None = None) -> 
             job.status = status
             if error:
                 job.error_message = error
+            elif status in ("complete", "review", "finalizing"):
+                # Don't carry a stale error message into a successful state —
+                # confusing in the UI when re-rip recovers a previously-failed
+                # job and the row still says "1 track failed to rip…".
+                job.error_message = None
             if status == "complete" and not job.completed_at:
                 from datetime import datetime, timezone
                 job.completed_at = datetime.now(timezone.utc)
