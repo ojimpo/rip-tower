@@ -38,8 +38,8 @@ class MusicBrainzSource(MetadataSource):
         track_count = identity.track_count if identity else 0
         total_seconds = getattr(identity, "total_seconds", 0) if identity else 0
 
-        if self.mode in ("both", "disc_id") and identity and identity.disc_id:
-            results = await self._lookup_discid(identity.disc_id, track_count)
+        if self.mode in ("both", "disc_id") and identity:
+            results = await self._lookup_discid(identity)
             candidates.extend(results)
 
         if self.mode == "text_search" or (
@@ -51,19 +51,90 @@ class MusicBrainzSource(MetadataSource):
 
         return candidates
 
-    async def _lookup_discid(self, disc_id: str, track_count: int) -> list[dict]:
+    @staticmethod
+    def _pick_medium(
+        media: list[dict], track_count: int, total_seconds: int,
+        target_disc: int = 0,
+    ) -> dict | None:
+        """Pick the medium that best matches our physical disc.
+
+        Prefer track_count match (with duration tiebreak when several share
+        the same count), then position == target_disc, then first medium.
+        """
+        if not media:
+            return None
+
+        def medium_seconds(m: dict) -> int:
+            ms = sum(t.get("length") or 0 for t in m.get("tracks", []))
+            return ms // 1000
+
+        if track_count:
+            matching = [m for m in media if m.get("track-count") == track_count]
+            if len(matching) == 1:
+                return matching[0]
+            if matching:
+                if total_seconds > 0:
+                    return min(
+                        matching,
+                        key=lambda m: abs(medium_seconds(m) - total_seconds),
+                    )
+                target_match = next(
+                    (m for m in matching if m.get("position") == target_disc), None,
+                )
+                if target_match:
+                    return target_match
+                return matching[0]
+        if target_disc:
+            target_match = next(
+                (m for m in media if m.get("position") == target_disc), None,
+            )
+            if target_match:
+                return target_match
+        return media[0]
+
+    async def _lookup_discid(self, identity: Any) -> list[dict]:
+        """Look up MB releases by disc TOC.
+
+        cd-discid produces a CDDB-style hex disc ID; MusicBrainz's
+        /discid/{id} endpoint expects its own SHA1-based ID and returns
+        HTTP 400 for our hex. Submit the TOC instead via /discid/-?toc=...,
+        which is what /api/drives/<id>/identify already uses successfully.
+        """
+        track_count = identity.track_count if identity else 0
+        offsets = list(getattr(identity, "offsets", None) or [])
+        leadout_seconds = getattr(identity, "leadout", 0) or 0
+        total_seconds = (
+            getattr(identity, "total_seconds", 0) or leadout_seconds
+        )
+
+        if not offsets or not leadout_seconds or not track_count:
+            # Older jobs may not have stored offsets/leadout — without them
+            # we can't synthesize a TOC, so skip rather than 400 the API.
+            return []
+
+        # cd-discid reports leadout in seconds; MB wants sectors (75/sec)
+        leadout_sectors = leadout_seconds * 75
+        toc = f"1 {track_count} {leadout_sectors} {' '.join(str(o) for o in offsets)}"
+
         await asyncio.sleep(RATE_LIMIT)
         async with httpx.AsyncClient(headers=HEADERS, timeout=15) as client:
             try:
                 resp = await client.get(
-                    f"{MB_BASE}/discid/{disc_id}",
-                    params={"fmt": "json", "inc": "recordings+artist-credits"},
+                    f"{MB_BASE}/discid/-",
+                    params={
+                        "toc": toc,
+                        "fmt": "json",
+                        "inc": "recordings+artist-credits",
+                    },
                 )
                 if resp.status_code == 404:
-                    logger.debug("MB discid %s: not found", disc_id)
+                    logger.debug("MB TOC %s: not found", toc)
                     return []
                 if resp.status_code != 200:
-                    logger.warning("MB discid error: HTTP %d", resp.status_code)
+                    logger.warning(
+                        "MB TOC lookup error: HTTP %d (toc=%s)",
+                        resp.status_code, toc,
+                    )
                     return []
 
                 data = resp.json()
@@ -74,30 +145,30 @@ class MusicBrainzSource(MetadataSource):
                     artist = ""
                     ac = release.get("artist-credit", [])
                     if ac:
-                        artist = ac[0].get("name", "") if isinstance(ac[0], dict) else str(ac[0])
+                        artist = (
+                            ac[0].get("name", "")
+                            if isinstance(ac[0], dict) else str(ac[0])
+                        )
 
-                    # Find which medium (disc) this disc ID matched
-                    media = release.get("media", [])
+                    media = [
+                        m for m in release.get("media", [])
+                        if m.get("format") == "CD"
+                    ]
+                    if not media:
+                        media = release.get("media", [])
                     total_discs = len(media)
-                    disc_number = 1
-                    tracks = []
+                    if not media:
+                        continue
 
-                    for medium in media:
-                        # Check if this medium contains our disc ID
-                        medium_discids = [
-                            d.get("id", "") for d in medium.get("discs", [])
-                        ]
-                        if disc_id in medium_discids or len(media) == 1:
-                            disc_number = medium.get("position", 1)
-                            for track in medium.get("tracks", []):
-                                rec = track.get("recording", {})
-                                tracks.append(rec.get("title", track.get("title", "")))
-                            break
-                    else:
-                        # Fallback: use first medium
-                        for track in media[0].get("tracks", []) if media else []:
-                            rec = track.get("recording", {})
-                            tracks.append(rec.get("title", track.get("title", "")))
+                    chosen = self._pick_medium(media, track_count, total_seconds)
+                    if chosen is None:
+                        continue
+                    disc_number = chosen.get("position", 1)
+
+                    tracks = []
+                    for track in chosen.get("tracks", []):
+                        rec = track.get("recording", {})
+                        tracks.append(rec.get("title", track.get("title", "")))
 
                     candidates.append({
                         "artist": artist,
@@ -111,10 +182,12 @@ class MusicBrainzSource(MetadataSource):
                         "confidence": 90,
                         "disc_number": disc_number,
                         "total_discs": total_discs,
-                        "source_url": f"https://musicbrainz.org/release/{release.get('id', '')}",
+                        "source_url": (
+                            f"https://musicbrainz.org/release/{release.get('id', '')}"
+                        ),
                         "evidence": json.dumps({
-                            "match": "disc_id_exact",
-                            "discid": disc_id,
+                            "match": "toc_submission",
+                            "toc": toc,
                             "mb_release": release.get("id", ""),
                             "disc_number": disc_number,
                             "total_discs": total_discs,
@@ -124,7 +197,7 @@ class MusicBrainzSource(MetadataSource):
                 return candidates
 
             except Exception:
-                logger.exception("MusicBrainz disc ID lookup failed")
+                logger.exception("MusicBrainz TOC lookup failed")
                 return []
 
     async def _text_search(
@@ -290,38 +363,9 @@ class MusicBrainzSource(MetadataSource):
         if not media:
             return [], 1, 1
 
-        def medium_seconds(m: dict) -> int:
-            ms = sum(t.get("length") or 0 for t in m.get("tracks", []))
-            return ms // 1000
-
-        # Pick medium: prefer track_count match (with duration tiebreak),
-        # then target_disc, else first.
-        chosen = None
-        if track_count:
-            matching = [m for m in media if m.get("track-count") == track_count]
-            if len(matching) == 1:
-                chosen = matching[0]
-            elif matching:
-                if total_seconds > 0:
-                    # Closest by absolute duration delta (CD pre-gap accounts
-                    # for ~2s slack, but compilations can drift a few seconds)
-                    chosen = min(
-                        matching,
-                        key=lambda m: abs(medium_seconds(m) - total_seconds),
-                    )
-                else:
-                    # No duration signal — prefer the target_disc match if any
-                    chosen = next(
-                        (m for m in matching if m.get("position") == target_disc),
-                        matching[0],
-                    )
+        chosen = self._pick_medium(media, track_count, total_seconds, target_disc)
         if chosen is None:
-            for m in media:
-                if m.get("position") == target_disc:
-                    chosen = m
-                    break
-        if chosen is None:
-            chosen = media[0]
+            return [], 1, total_discs
 
         tracks = []
         for t in chosen.get("tracks", []):

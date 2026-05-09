@@ -241,6 +241,83 @@ async def test_mb_text_search_tiebreaks_same_track_count_by_duration(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_mb_disc_id_mode_uses_toc_submission(monkeypatch):
+    """cd-discid produces a CDDB hex disc ID, not a MusicBrainz one — the
+    /discid/{id} endpoint rejects it with HTTP 400. We fall back to
+    /discid/-?toc=... TOC submission, which is what /api/drives/identify
+    already uses successfully. Verify we hit the TOC endpoint and parse
+    the response into candidates."""
+    from backend.metadata.sources import musicbrainz as mb_mod
+
+    captured: dict = {}
+
+    def toc_responder(url, params):
+        captured["url"] = url
+        captured["params"] = params
+        return _Resp(200, {"releases": [{
+            "id": "rel-toc",
+            "title": "Some Album",
+            "artist-credit": [{"name": "Some Artist"}],
+            "date": "2024",
+            "media": [{
+                "format": "CD",
+                "position": 1,
+                "track-count": 10,
+                "tracks": [
+                    {"recording": {"title": f"T{i}"}, "length": 200_000}
+                    for i in range(1, 11)
+                ],
+            }],
+        }]})
+
+    _patch_httpx(monkeypatch, mb_mod, {
+        "https://musicbrainz.org/ws/2/discid/-": toc_responder,
+    })
+
+    src = MusicBrainzSource(mode="disc_id")
+    identity = SimpleNamespace(
+        disc_id="9d0c2e0a",  # CDDB hex — would 400 on /discid/{id}
+        track_count=10,
+        offsets=[150, 18000, 36000, 54000, 72000, 90000, 108000, 126000, 144000, 162000],
+        leadout=2400,  # seconds
+        total_seconds=2400,
+    )
+    candidates = await src.search(identity, hints=None)
+
+    assert candidates, "expected one MB candidate from TOC submission"
+    assert "/ws/2/discid/-" in captured["url"]
+    # leadout in MB TOC must be sectors (75/sec), not seconds
+    assert "180000" in captured["params"]["toc"]  # 2400 * 75
+    assert candidates[0]["artist"] == "Some Artist"
+    assert candidates[0]["album"] == "Some Album"
+    titles = json.loads(candidates[0]["track_titles"])
+    assert titles == [f"T{i}" for i in range(1, 11)]
+    evidence = json.loads(candidates[0]["evidence"])
+    assert evidence["match"] == "toc_submission"
+
+
+@pytest.mark.asyncio
+async def test_mb_disc_id_mode_no_offsets_returns_empty(monkeypatch):
+    """Restored identities from older jobs may lack offsets/leadout; without
+    them we can't synthesize a TOC, so skip cleanly rather than 400 the API."""
+    from backend.metadata.sources import musicbrainz as mb_mod
+
+    def fail_if_called(url, params):
+        raise AssertionError(f"should not have hit MB: {url}")
+
+    _patch_httpx(monkeypatch, mb_mod, {
+        "https://musicbrainz.org/ws/2/discid/-": fail_if_called,
+    })
+
+    src = MusicBrainzSource(mode="disc_id")
+    identity = SimpleNamespace(
+        disc_id="abc", track_count=10, offsets=[], leadout=0, total_seconds=0,
+    )
+    candidates = await src.search(identity, hints={"title": "X", "artist": "Y"})
+    assert candidates == []
+
+
+@pytest.mark.asyncio
 async def test_mb_disc_id_mode_skips_text_search(monkeypatch):
     from backend.metadata.sources import musicbrainz as mb_mod
 
