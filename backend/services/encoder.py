@@ -231,9 +231,12 @@ async def _tag_flac(path: Path, track, meta) -> None:
     if track.track_num:
         tags.append(f"--set-tag=TRACKNUMBER={track.track_num}")
 
-    # ALBUMARTIST: use "Various Artists" for compilations, else album artist
+    # ALBUMARTIST: use "Various Artists" for compilations, else album artist.
+    # COMPILATION=1 is the iTunes-style flag that Plex/iTunes use to keep
+    # compilation albums out of per-artist views.
     if getattr(meta, "is_compilation", False):
         tags.append("--set-tag=ALBUMARTIST=Various Artists")
+        tags.append("--set-tag=COMPILATION=1")
     elif album_artist:
         tags.append(f"--set-tag=ALBUMARTIST={album_artist}")
 

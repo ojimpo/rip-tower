@@ -66,11 +66,11 @@ class TestBuildEncodeCmd:
 
     def test_flac_command(self):
         cmd = _build_encode_cmd("flac", 8, Path("/tmp/in.wav"), Path("/tmp/out.flac"))
-        assert cmd == ["flac", "-8", "-o", "/tmp/out.flac", "/tmp/in.wav"]
+        assert cmd == ["flac", "-f", "-8", "-o", "/tmp/out.flac", "/tmp/in.wav"]
 
     def test_flac_quality_5(self):
         cmd = _build_encode_cmd("flac", 5, Path("/tmp/in.wav"), Path("/tmp/out.flac"))
-        assert cmd[1] == "-5"
+        assert cmd[2] == "-5"
 
     def test_alac_command(self):
         cmd = _build_encode_cmd("alac", 0, Path("/tmp/in.wav"), Path("/tmp/out.m4a"))

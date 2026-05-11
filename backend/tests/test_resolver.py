@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -252,3 +253,68 @@ async def test_auto_match_preserves_distinct_disc_numbers(
         b = await s.get(JobMetadata, "disc-b")
     assert a.disc_number == 1
     assert b.disc_number == 2
+
+
+@pytest.mark.asyncio
+async def test_auto_match_concurrent_resolution_keeps_group_unified(
+    monkeypatch, async_session_maker,
+):
+    """Regression for the Singles II two-disc split observed on 2026-05-07.
+
+    Two sibling discs from the same album finish metadata resolution almost
+    simultaneously (jobs 8bovmxq7 and ofgncm2c were 14 seconds apart). If
+    _auto_match_album_group runs concurrently for both, each invocation can
+    read the other as ungrouped, mint its own UUID, and overwrite the
+    sibling's album_group — leaving the two discs in *different* groups.
+
+    This test exercises the concurrent path with asyncio.gather and asserts
+    that both discs end up in the same group regardless of scheduling.
+    """
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+    monkeypatch.setattr(resolver, "broadcast", _noop_broadcast)
+
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="disc-a", drive_id="d1", disc_id="aaa", created_at=t0))
+        s.add(JobMetadata(
+            job_id="disc-a",
+            artist="中島みゆき",
+            album="Singles II",
+            album_base="Singles II",
+            disc_number=1,
+            total_discs=2,
+            confidence=70,
+            source="musicbrainz",
+        ))
+        s.add(Job(
+            id="disc-b", drive_id="d2", disc_id="bbb",
+            created_at=t0 + timedelta(seconds=14),
+        ))
+        s.add(JobMetadata(
+            job_id="disc-b",
+            artist="中島みゆき",
+            album="Singles II",
+            album_base="Singles II",
+            disc_number=2,
+            total_discs=2,
+            confidence=70,
+            source="musicbrainz",
+        ))
+        await s.commit()
+
+    await asyncio.gather(
+        resolver._auto_match_album_group("disc-a"),
+        resolver._auto_match_album_group("disc-b"),
+    )
+
+    async with async_session_maker() as s:
+        ja = await s.get(Job, "disc-a")
+        jb = await s.get(Job, "disc-b")
+
+    assert ja.album_group is not None
+    assert jb.album_group is not None
+    assert ja.album_group == jb.album_group, (
+        f"Concurrent _auto_match_album_group split the album into different "
+        f"groups: disc-a={ja.album_group} disc-b={jb.album_group}"
+    )
