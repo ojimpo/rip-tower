@@ -52,9 +52,11 @@ async def start_rip(
 ):
     """Start a new ripping job."""
     job_id = generate_short_id()
-    album_group = request.album_group or (
-        str(uuid.uuid4()) if request.total_discs and request.total_discs > 1 else None
-    )
+    # Don't mint a fresh UUID here just because total_discs > 1 — that gave
+    # each disc of a multi-disc set its own group when the client didn't pass
+    # an explicit album_group. Sibling discs get linked by
+    # _auto_match_album_group after metadata resolution instead.
+    album_group = request.album_group
 
     job = Job(
         id=job_id,
