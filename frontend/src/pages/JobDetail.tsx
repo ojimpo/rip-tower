@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useJob } from "../hooks/useJob";
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -14,6 +14,43 @@ import type {
 } from "../lib/types";
 
 type Tab = "metadata" | "artwork" | "lyrics" | "kashidashi";
+
+interface MergeCandidate {
+  job_id: string;
+  artist: string | null;
+  album: string | null;
+  disc_number: number | null;
+  created_at: string;
+}
+
+function _stripDiscSuffix(s: string): string {
+  return s.replace(/\s*[\[\(]?\s*(?:DISC|Disc|disc|CD|Cd|cd)\s*\d+\s*[\]\)]?/g, "").trim();
+}
+
+function mergeScore(self: MergeCandidate, other: MergeCandidate): number {
+  if (other.job_id === self.job_id) return -1;
+  let s = 0;
+  const sa = (self.artist || "").trim();
+  const oa = (other.artist || "").trim();
+  const sl = (self.album || "").trim();
+  const ol = (other.album || "").trim();
+
+  if (sa && oa && sa === oa) s += 4;
+  if (sl && ol && _stripDiscSuffix(sl) === _stripDiscSuffix(ol)) s += 4;
+
+  // Both sides unknown — same-session heuristic (within 30 min)
+  if (!sa && !oa && !sl && !ol) {
+    const dt = Math.abs(
+      new Date(self.created_at).getTime() - new Date(other.created_at).getTime(),
+    );
+    if (dt < 30 * 60 * 1000) s += 3;
+  }
+
+  if (self.disc_number && other.disc_number && self.disc_number !== other.disc_number) {
+    s += 1;
+  }
+  return s;
+}
 
 export default function JobDetail() {
   const { id } = useParams<{ id: string }>();
@@ -190,11 +227,35 @@ export default function JobDetail() {
     enabled: !!albumGroup,
   });
 
+  const showMergeSuggest =
+    data?.job.status === "review" && !data?.job.album_group;
   const recentJobsQuery = useQuery({
     queryKey: ["jobs", "for-group-picker"],
     queryFn: () => api.getJobs() as Promise<{ jobs: JobSummary[] }>,
-    enabled: groupPickerOpen,
+    enabled: groupPickerOpen || showMergeSuggest,
   });
+
+  const mergeCandidates = useMemo(() => {
+    if (!recentJobsQuery.data || !data) return [];
+    const self: MergeCandidate = {
+      job_id: jobId,
+      artist: data.metadata?.artist ?? null,
+      album: data.metadata?.album ?? null,
+      disc_number: data.metadata?.disc_number ?? null,
+      created_at: data.job.created_at,
+    };
+    const groupMembers = new Set(groupQuery.data?.jobs.map((g) => g.job_id) ?? []);
+    return recentJobsQuery.data.jobs
+      .filter((rj) => rj.job_id !== jobId && !groupMembers.has(rj.job_id))
+      .map((rj) => ({ job: rj, score: mergeScore(self, rj) }))
+      .filter((c) => c.score >= 0)
+      .sort((a, b) => b.score - a.score);
+  }, [recentJobsQuery.data, data, groupQuery.data, jobId]);
+
+  const strongMergeCandidates = useMemo(
+    () => mergeCandidates.filter((c) => c.score >= 5).slice(0, 3),
+    [mergeCandidates],
+  );
 
   const createGroupMutation = useMutation({
     mutationFn: () => api.createGroup(jobId),
@@ -525,44 +586,39 @@ export default function JobDetail() {
                       </button>
                     </div>
                     <div className="max-h-48 overflow-y-auto space-y-1">
-                      {recentJobsQuery.data?.jobs
-                        .filter((rj) => rj.job_id !== jobId)
-                        .filter(() => true)
-                        .map((rj) => (
-                          <button
-                            key={rj.job_id}
-                            onClick={() => {
-                              if (job.album_group) {
-                                // Add picked job to this job's group
-                                addToGroupMutation.mutate({
-                                  targetJobId: rj.job_id,
-                                  groupId: job.album_group!,
-                                });
-                              } else {
-                                // First, create group for this job, then we need the group_id
-                                // Simpler: use createGroup then addToGroup
-                                (api.createGroup(jobId) as Promise<{ album_group: string }>).then(
-                                  (res) => {
-                                    addToGroupMutation.mutate({
-                                      targetJobId: rj.job_id,
-                                      groupId: res.album_group,
-                                    });
-                                  }
-                                );
-                              }
-                            }}
-                            disabled={addToGroupMutation.isPending}
-                            className="w-full text-left px-2.5 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition text-xs disabled:opacity-50"
-                          >
-                            <span className="text-gray-300">{rj.artist || "?"}</span>
-                            <span className="text-gray-500"> / {rj.album || "?"}</span>
-                            <span className="text-gray-600 ml-1.5 text-[10px]">[{rj.status}]</span>
-                          </button>
-                        ))}
+                      {mergeCandidates.map(({ job: rj, score }) => (
+                        <button
+                          key={rj.job_id}
+                          onClick={() => {
+                            if (job.album_group) {
+                              addToGroupMutation.mutate({
+                                targetJobId: rj.job_id,
+                                groupId: job.album_group!,
+                              });
+                            } else {
+                              (api.createGroup(jobId) as Promise<{ album_group: string }>).then(
+                                (res) => {
+                                  addToGroupMutation.mutate({
+                                    targetJobId: rj.job_id,
+                                    groupId: res.album_group,
+                                  });
+                                }
+                              );
+                            }
+                          }}
+                          disabled={addToGroupMutation.isPending}
+                          className="w-full text-left px-2.5 py-2 rounded-lg bg-white/5 hover:bg-white/10 transition text-xs disabled:opacity-50"
+                        >
+                          {score >= 5 && <span className="text-amber-400 mr-1">\u2605</span>}
+                          <span className="text-gray-300">{rj.artist || "?"}</span>
+                          <span className="text-gray-500"> / {rj.album || "?"}</span>
+                          <span className="text-gray-600 ml-1.5 text-[10px]">[{rj.status}]</span>
+                        </button>
+                      ))}
                       {recentJobsQuery.isLoading && (
                         <p className="text-[11px] text-gray-500 text-center py-2">{"\u8AAD\u307F\u8FBC\u307F\u4E2D"}...</p>
                       )}
-                      {recentJobsQuery.data?.jobs.filter((rj) => rj.job_id !== jobId).length === 0 && (
+                      {!recentJobsQuery.isLoading && mergeCandidates.length === 0 && (
                         <p className="text-[11px] text-gray-500 text-center py-2">{"\u4ED6\u306E\u30B8\u30E7\u30D6\u304C\u3042\u308A\u307E\u305B\u3093"}</p>
                       )}
                     </div>
@@ -831,6 +887,48 @@ export default function JobDetail() {
                   {(trashConflictsMutation.error as Error).message}
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Merge suggestion banner */}
+          {showMergeSuggest && strongMergeCandidates.length > 0 && (
+            <div className="mx-4 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] text-amber-300 font-medium">
+                  {"同じアルバムの可能性"}
+                </span>
+                <span className="text-[10px] text-amber-400/70">
+                  {strongMergeCandidates.length}件
+                </span>
+              </div>
+              <div className="space-y-1">
+                {strongMergeCandidates.map(({ job: rj }) => (
+                  <button
+                    key={rj.job_id}
+                    onClick={() => {
+                      (api.createGroup(jobId) as Promise<{ album_group: string }>).then(
+                        (res) => {
+                          addToGroupMutation.mutate({
+                            targetJobId: rj.job_id,
+                            groupId: res.album_group,
+                          });
+                        },
+                      );
+                    }}
+                    disabled={addToGroupMutation.isPending}
+                    className="w-full text-left px-2 py-1.5 rounded bg-white/5 hover:bg-amber-500/15 transition text-xs disabled:opacity-50"
+                  >
+                    <span className="text-amber-200">
+                      Disc {rj.disc_number ?? "?"} ·{" "}
+                    </span>
+                    <span className="text-gray-300">{rj.artist || "?"}</span>
+                    <span className="text-gray-500"> / {rj.album || "?"}</span>
+                    <span className="text-amber-400 ml-1.5 text-[10px]">
+                      {"→ 統合"}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

@@ -9,7 +9,7 @@ and ~/dev/openclaw-cd-rip/scripts/kashidashi.py.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -131,7 +131,84 @@ class KashidashiSource(MetadataSource):
                     "evidence": json.dumps(evidence, ensure_ascii=False),
                 })
 
+        # Phase 1 fallback: when no exact / fuzzy match and no external hints,
+        # surface recently-borrowed unripped items as low-to-mid confidence
+        # candidates. Even when kashidashi's metadata_* fields are empty, the
+        # plain `artist`/`title` columns suffice to drive Phase 2 text-search
+        # (MusicBrainz/iTunes/Discogs) which can then return proper tracklists.
+        if not candidates and not hint_artist and not hint_album:
+            candidates.extend(
+                _recency_fallback_candidates(items, base_url, track_count)
+            )
+
         return candidates
+
+
+_FALLBACK_WINDOW_DAYS = 7
+
+
+def _recency_fallback_candidates(
+    items: list[dict], base_url: str, track_count: int
+) -> list[dict]:
+    """Build recency-fallback candidates from kashidashi items.
+
+    Only items borrowed within _FALLBACK_WINDOW_DAYS and not yet returned/ripped,
+    that have at least one of `artist`/`title` filled in, are considered.
+
+    Confidence scales inversely with eligible-pool size: when the user borrowed
+    one disc today, that disc is almost certainly the one being ripped now;
+    when they borrowed five at once, we can't tell which is which, so each
+    candidate is low-confidence and review will surface them all.
+    """
+    today = datetime.now(timezone.utc).date()
+    eligible: list[tuple[int, dict]] = []
+    for it in items:
+        if it.get("returned_at") or it.get("ripped_at"):
+            continue
+        if not (it.get("artist") or it.get("title")
+                or it.get("metadata_artist") or it.get("metadata_album")):
+            continue
+        bd_str = it.get("borrowed_date") or ""
+        try:
+            bd = datetime.strptime(bd_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        days = (today - bd).days
+        if days < 0 or days > _FALLBACK_WINDOW_DAYS:
+            continue
+        eligible.append((days, it))
+
+    pool_size = len(eligible)
+    if pool_size == 0:
+        return []
+    if pool_size == 1:
+        base = 70
+    elif pool_size <= 3:
+        base = 60
+    else:
+        base = 50
+
+    out: list[dict] = []
+    for days, it in eligible:
+        c = base
+        item_tc = it.get("metadata_track_count")
+        if item_tc and track_count and int(item_tc) == int(track_count):
+            c += 5
+        if days == 0:
+            c += 5
+        out.append({
+            "artist": it.get("metadata_artist") or it.get("artist", ""),
+            "album": it.get("metadata_album") or it.get("title", ""),
+            "confidence": min(c, 80),
+            "source_url": f"{base_url}/api/items/{it.get('id')}",
+            "evidence": json.dumps({
+                "kashidashi_id": it.get("id"),
+                "match": "recency_fallback",
+                "days_since_borrow": days,
+                "pool_size": pool_size,
+            }, ensure_ascii=False),
+        })
+    return out
 
 
 async def match_kashidashi(job_id: str, identity: Any) -> None:
