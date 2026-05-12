@@ -606,7 +606,9 @@ async def trash_conflicts(
     label = f"{artist_dir} - {album_dir}"
     moved = move_to_trash(existing, trash_dir, label)
 
-    # Clear existing_files issue
+    # Clear existing_files issue. The job stays in review and the user must
+    # press the approve button again — keeps the action explicit and consistent
+    # with every other review exit.
     issues = json.loads(meta.issues) if meta.issues else []
     if "existing_files" in issues:
         issues.remove("existing_files")
@@ -615,29 +617,10 @@ async def trash_conflicts(
             meta.needs_review = (meta.confidence or 0) < config.general.auto_approve_threshold
     await session.commit()
 
-    # If the user already approved before the conflict bounced it back to
-    # review, trashing the conflict expresses intent to proceed. Auto-kick
-    # finalize so the user doesn't have to re-press approve.
-    auto_finalized = False
-    if (
-        meta.approved
-        and job.status == "review"
-        and not (issues and "existing_files" in issues)
-    ):
-        job.status = "finalizing"
-        await session.commit()
-
-        from backend.services.pipeline import run_finalize
-        import asyncio
-
-        asyncio.create_task(run_finalize(job_id))
-        auto_finalized = True
-
     return {
         "status": "trashed",
         "moved": moved,
         "trash_label": label,
-        "auto_finalized": auto_finalized,
     }
 
 
