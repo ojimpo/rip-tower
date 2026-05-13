@@ -319,14 +319,22 @@ async def reapply_metadata(job_id: str) -> None:
     logger.info("Re-applied metadata for job %s → %s", job_id, target_dir)
 
 
-AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wma", ".alac", ".wav"}
+AUDIO_EXTENSIONS = {
+    ".flac", ".m4a", ".mp3", ".aac", ".ogg", ".opus", ".wma", ".alac", ".wav",
+}
 
 
 def _find_existing_audio(output_dir: Path) -> list[Path]:
-    """Find non-FLAC audio files already in the target directory.
+    """Find audio files already in the target directory.
+
+    FLAC was previously excluded on the theory that it could be left over from
+    a same-job retry. That doesn't actually happen — finalize moves files out
+    of incoming and bounces back to review before moving anything when a
+    conflict is detected, so output_dir's contents always belong to a prior
+    finalized job. Excluding FLAC let a second rip of the same disc silently
+    overwrite the first (see Todoist 6gf83JC86P4v7h4m).
 
     Returns empty list if dir doesn't exist or has no audio files.
-    FLAC files are excluded since they could be from a previous rip of the same job.
     """
     if not output_dir.exists():
         return []
