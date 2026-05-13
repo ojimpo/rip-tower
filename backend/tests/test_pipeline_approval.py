@@ -216,6 +216,95 @@ async def test_last_sibling_finish_wakes_parked_group_members(
     assert not a_meta.issues or "waiting_for_group" not in json.loads(a_meta.issues)
 
 
+# ────────────────────────── duplicate-rip detection ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detect_duplicate_rip_flags_metadata_when_prior_complete_job_exists(
+    patch_pipeline_globals, async_session_maker,
+):
+    """Reproduces Todoist 6gf83JC86P4v7h4m bug #1: ripping a disc whose TOC
+    matches a prior complete job must surface duplicate_rip so the next
+    auto-approve gate (Bug A) keeps the user in review."""
+    async with async_session_maker() as s:
+        s.add(Job(
+            id="old-job",
+            toc_hash="abc123",
+            status="complete",
+            output_dir="/music/Artist/Album",
+        ))
+        s.add(Job(id="new-job", toc_hash="abc123", status="ripping"))
+        s.add(JobMetadata(job_id="new-job"))
+        await s.commit()
+
+    await pipeline._detect_duplicate_rip("new-job", "abc123")
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "new-job")
+    issues = json.loads(meta.issues)
+    assert "duplicate_rip" in issues
+    assert any(i == "duplicate_of_old-job" for i in issues)
+    assert meta.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_detect_duplicate_rip_no_match_is_noop(
+    patch_pipeline_globals, async_session_maker,
+):
+    """Without a matching prior complete job, no issue is added — the typical
+    first-rip case must not be flagged."""
+    async with async_session_maker() as s:
+        s.add(Job(id="new-job", toc_hash="xyz", status="ripping"))
+        s.add(JobMetadata(job_id="new-job"))
+        await s.commit()
+
+    await pipeline._detect_duplicate_rip("new-job", "xyz")
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "new-job")
+    assert meta.issues is None
+
+
+@pytest.mark.asyncio
+async def test_detect_duplicate_rip_ignores_non_complete_prior(
+    patch_pipeline_globals, async_session_maker,
+):
+    """A prior job with the same TOC but in error/review state isn't a
+    duplicate-rip target — the user hasn't actually filed those tracks yet,
+    so there's nothing to silently overwrite."""
+    async with async_session_maker() as s:
+        s.add(Job(id="old-error", toc_hash="dup", status="error"))
+        s.add(Job(id="old-review", toc_hash="dup", status="review"))
+        s.add(Job(id="new-job", toc_hash="dup", status="ripping"))
+        s.add(JobMetadata(job_id="new-job"))
+        await s.commit()
+
+    await pipeline._detect_duplicate_rip("new-job", "dup")
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "new-job")
+    assert meta.issues is None
+
+
+@pytest.mark.asyncio
+async def test_detect_duplicate_rip_blank_toc_hash_skips(
+    patch_pipeline_globals, async_session_maker,
+):
+    """Older jobs may not have a toc_hash. We must not match every nullhash to
+    every prior null-hash job and flag everything as a duplicate."""
+    async with async_session_maker() as s:
+        s.add(Job(id="old", toc_hash=None, status="complete"))
+        s.add(Job(id="new-job", toc_hash=None, status="ripping"))
+        s.add(JobMetadata(job_id="new-job"))
+        await s.commit()
+
+    await pipeline._detect_duplicate_rip("new-job", None)
+
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "new-job")
+    assert meta.issues is None
+
+
 @pytest.mark.asyncio
 async def test_wake_skips_siblings_without_waiting_for_group(
     patch_pipeline_globals, async_session_maker,

@@ -136,6 +136,12 @@ async def run_pipeline(job_id: str, request: RipRequest) -> None:
 
             identity = await read_disc(request.drive_id, job_id)
 
+            # Flag a duplicate rip so it can't sneak through auto-approve and
+            # silently overwrite the prior complete job's files. The actual
+            # rip continues — the user might still want this rip (newer disc,
+            # better drive, etc.) — but the duplicate_rip issue forces review.
+            await _detect_duplicate_rip(job_id, identity.toc_hash)
+
             # 2. Parallel: resolving + ripping
             await _update_status(job_id, "ripping")
 
@@ -333,6 +339,75 @@ async def _check_approval(job_id: str) -> None:
     # parked in review with `waiting_for_group` — they were waiting on us.
     if album_group:
         await _wake_waiting_group_siblings(album_group, exclude_job_id=job_id)
+
+
+async def _detect_duplicate_rip(job_id: str, toc_hash: str | None) -> None:
+    """Stamp duplicate_rip on the metadata if this TOC was already ripped.
+
+    Searches for any prior `complete` job with the same toc_hash. The job
+    must be different from the current one (own-job match is normal on
+    re-rip). A matching prior is recorded as both:
+      - "duplicate_rip"            — blocking marker for _check_approval
+      - "duplicate_of_<job_id>"    — informational ref for the UI
+
+    This is best-effort: a missing toc_hash (older job or unusual disc)
+    silently skips, and any DB error is logged but doesn't fail the rip.
+    """
+    if not toc_hash:
+        return
+
+    import json as _json
+
+    try:
+        async with async_session() as session:
+            prior = await session.execute(
+                select(Job).where(
+                    Job.toc_hash == toc_hash,
+                    Job.id != job_id,
+                    Job.status == "complete",
+                )
+                .order_by(Job.completed_at.desc())
+                .limit(1)
+            )
+            existing = prior.scalar_one_or_none()
+            if not existing:
+                return
+
+            meta = await session.get(JobMetadata, job_id)
+            if meta is None:
+                meta = JobMetadata(job_id=job_id)
+                session.add(meta)
+
+            issues: list[str] = []
+            if meta.issues:
+                try:
+                    issues = _json.loads(meta.issues) or []
+                except (ValueError, TypeError):
+                    issues = []
+
+            ref_tag = f"duplicate_of_{existing.id}"
+            if "duplicate_rip" not in issues:
+                issues.append("duplicate_rip")
+            issues = [i for i in issues if not i.startswith("duplicate_of_")]
+            issues.append(ref_tag)
+            meta.issues = _json.dumps(issues, ensure_ascii=False)
+            meta.needs_review = True
+            await session.commit()
+
+        logger.warning(
+            "Duplicate rip detected for job %s: TOC matches prior complete job %s (%s)",
+            job_id, existing.id, existing.output_dir or "no output_dir",
+        )
+        await broadcast(
+            "job:duplicate_rip",
+            {
+                "job_id": job_id,
+                "duplicate_of": existing.id,
+                "output_dir": existing.output_dir,
+            },
+        )
+    except Exception:
+        logger.exception("Duplicate-rip detection failed for job %s", job_id)
 
 
 async def _wake_waiting_group_siblings(album_group: str, exclude_job_id: str) -> None:
