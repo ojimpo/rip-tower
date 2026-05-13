@@ -217,8 +217,22 @@ async def _run_rip(job_id: str, drive_id: str, identity: Any) -> None:
     await rip_disc(job_id, drive_id, identity)
 
 
+# Issues that block auto-approve even when confidence is high. Contradictions
+# arise when candidates disagree on artist/album, which is the classic symptom
+# of a TOC collision (e.g. MB disc-id false-positive overruling kashidashi);
+# duplicate_rip surfaces a prior complete job with the same TOC so the user
+# can decide merge-vs-discard before files get clobbered.
+_BLOCKING_ISSUES = frozenset({
+    "artist_contradiction",
+    "album_contradiction",
+    "duplicate_rip",
+})
+
+
 async def _check_approval(job_id: str) -> None:
     """Check if the job can be auto-approved based on confidence threshold."""
+    import json as _json
+
     from backend.config import get_config
 
     config = get_config()
@@ -253,7 +267,15 @@ async def _check_approval(job_id: str) -> None:
         confidence = meta.confidence if meta else 0
         threshold = config.general.auto_approve_threshold
 
-        if confidence and confidence >= threshold:
+        issues_list: list[str] = []
+        if meta and meta.issues:
+            try:
+                issues_list = _json.loads(meta.issues) or []
+            except (ValueError, TypeError):
+                issues_list = []
+        blocking = [i for i in issues_list if i in _BLOCKING_ISSUES]
+
+        if confidence and confidence >= threshold and not blocking:
             # Auto-approve
             job.status = "finalizing"
             if meta:
@@ -268,9 +290,13 @@ async def _check_approval(job_id: str) -> None:
             if meta:
                 meta.needs_review = True
             await session.commit()
+            if blocking:
+                reason = f"blocking issues: {', '.join(blocking)}"
+            else:
+                reason = f"confidence {confidence} < threshold {threshold}"
             await broadcast("job:review", {
                 "job_id": job_id,
-                "reason": f"confidence {confidence} < threshold {threshold}",
+                "reason": reason,
             })
 
             # Send Discord notification
