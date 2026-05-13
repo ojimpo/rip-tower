@@ -143,3 +143,105 @@ async def test_low_confidence_still_routes_to_review_with_reason(
         job = await s.get(Job, "job-lowconf")
     assert job.status == "review"
     assert "confidence 40" in patch_pipeline_globals.review_events[-1]["reason"]
+
+
+# ─────────────────────── album_group sibling re-evaluation ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_group_sibling_parks_with_waiting_for_group_when_others_in_progress(
+    patch_pipeline_globals, async_session_maker,
+):
+    """A group member that finishes ahead of its siblings parks in review and
+    marks itself with waiting_for_group so the last sibling can wake it."""
+    await _seed_job(
+        async_session_maker, "disc-a", confidence=95, issues=None,
+        album_group="grp-1", status="encoding",
+    )
+    await _seed_job(
+        async_session_maker, "disc-b", confidence=95, issues=None,
+        album_group="grp-1", status="ripping",
+    )
+
+    await pipeline._check_approval("disc-a")
+
+    assert patch_pipeline_globals.finalize_calls == [], (
+        "must wait for sibling, not finalize"
+    )
+    async with async_session_maker() as s:
+        meta = await s.get(JobMetadata, "disc-a")
+        job = await s.get(Job, "disc-a")
+    assert job.status == "review"
+    assert "waiting_for_group" in json.loads(meta.issues)
+
+
+@pytest.mark.asyncio
+async def test_last_sibling_finish_wakes_parked_group_members(
+    patch_pipeline_globals, async_session_maker,
+):
+    """Reproduces Todoist 6gf83JC86P4v7h4m bug #3: a sibling parked with
+    waiting_for_group stayed stuck even after the other discs finished.
+
+    Setup: disc-a already parked (status=review, issues=['waiting_for_group']),
+    disc-b finishes encoding and runs _check_approval. The last sibling's
+    decision should now wake disc-a and let it auto-approve too.
+    """
+    # disc-a was parked earlier
+    async with async_session_maker() as s:
+        s.add(Job(id="disc-a", album_group="grp-2", status="review"))
+        s.add(JobMetadata(
+            job_id="disc-a",
+            confidence=95,
+            needs_review=True,
+            issues=json.dumps(["waiting_for_group"]),
+        ))
+        # disc-b just finished encoding, about to be evaluated
+        s.add(Job(id="disc-b", album_group="grp-2", status="encoding"))
+        s.add(JobMetadata(job_id="disc-b", confidence=95))
+        await s.commit()
+
+    await pipeline._check_approval("disc-b")
+
+    # Both should now be in finalizing — disc-b directly, disc-a via the
+    # sibling wake-up that follows.
+    assert sorted(patch_pipeline_globals.finalize_calls) == ["disc-a", "disc-b"]
+
+    async with async_session_maker() as s:
+        a = await s.get(Job, "disc-a")
+        a_meta = await s.get(JobMetadata, "disc-a")
+        b = await s.get(Job, "disc-b")
+    assert a.status == "finalizing"
+    assert b.status == "finalizing"
+    # waiting_for_group must be cleared after re-evaluation succeeds.
+    assert not a_meta.issues or "waiting_for_group" not in json.loads(a_meta.issues)
+
+
+@pytest.mark.asyncio
+async def test_wake_skips_siblings_without_waiting_for_group(
+    patch_pipeline_globals, async_session_maker,
+):
+    """Sibling whose review state was caused by something else (e.g. low
+    confidence) must NOT be silently re-approved by the wake-up step."""
+    async with async_session_maker() as s:
+        s.add(Job(id="disc-a", album_group="grp-3", status="review"))
+        s.add(JobMetadata(
+            job_id="disc-a",
+            confidence=40,
+            needs_review=True,
+            issues=json.dumps(["other_issue"]),
+        ))
+        s.add(Job(id="disc-b", album_group="grp-3", status="encoding"))
+        s.add(JobMetadata(job_id="disc-b", confidence=95))
+        await s.commit()
+
+    await pipeline._check_approval("disc-b")
+
+    # disc-b proceeds, disc-a stays put untouched.
+    assert "disc-b" in patch_pipeline_globals.finalize_calls
+    assert "disc-a" not in patch_pipeline_globals.finalize_calls
+
+    async with async_session_maker() as s:
+        a = await s.get(Job, "disc-a")
+        a_meta = await s.get(JobMetadata, "disc-a")
+    assert a.status == "review"
+    assert json.loads(a_meta.issues) == ["other_issue"]

@@ -237,6 +237,12 @@ async def _check_approval(job_id: str) -> None:
 
     config = get_config()
 
+    # Statuses we treat as "this sibling is past the rip/encode phase and will
+    # not call _check_approval again on its own." finalizing is included so a
+    # transient sibling in the middle of finalize doesn't block re-evaluation;
+    # `complete` and `review` are the terminal/queued states.
+    _GROUP_DONE_STATUSES = ("encoding", "finalizing", "review", "complete")
+
     async with async_session() as session:
         meta = await session.execute(
             select(JobMetadata).where(JobMetadata.job_id == job_id)
@@ -253,10 +259,21 @@ async def _check_approval(job_id: str) -> None:
                 select(Job).where(Job.album_group == job.album_group)
             )
             group_jobs = group_jobs.scalars().all()
-            if any(j.status not in ("encoding", "review", "complete") for j in group_jobs if j.id != job_id):
-                # Other discs still in progress — wait
+            if any(j.status not in _GROUP_DONE_STATUSES for j in group_jobs if j.id != job_id):
+                # Other discs still in progress — park here and tag with
+                # waiting_for_group so the last sibling to finish can spot us
+                # and re-run our approval check.
                 job.status = "review"
                 meta.needs_review = True
+                existing_issues: list[str] = []
+                if meta.issues:
+                    try:
+                        existing_issues = _json.loads(meta.issues) or []
+                    except (ValueError, TypeError):
+                        existing_issues = []
+                if "waiting_for_group" not in existing_issues:
+                    existing_issues.append("waiting_for_group")
+                meta.issues = _json.dumps(existing_issues, ensure_ascii=False)
                 await session.commit()
                 await broadcast("job:review", {
                     "job_id": job_id,
@@ -274,6 +291,8 @@ async def _check_approval(job_id: str) -> None:
             except (ValueError, TypeError):
                 issues_list = []
         blocking = [i for i in issues_list if i in _BLOCKING_ISSUES]
+
+        album_group = job.album_group
 
         if confidence and confidence >= threshold and not blocking:
             # Auto-approve
@@ -309,6 +328,58 @@ async def _check_approval(job_id: str) -> None:
 
             # Schedule eject reminder
             await _schedule_eject_reminder(job_id)
+
+    # After this job's decision has settled, wake any sibling jobs that were
+    # parked in review with `waiting_for_group` — they were waiting on us.
+    if album_group:
+        await _wake_waiting_group_siblings(album_group, exclude_job_id=job_id)
+
+
+async def _wake_waiting_group_siblings(album_group: str, exclude_job_id: str) -> None:
+    """Re-run _check_approval for sibling jobs parked with waiting_for_group.
+
+    When the first disc of a multi-disc set finishes ahead of the others, it
+    parks itself in review with `waiting_for_group`. Previously that job stayed
+    stuck even after the rest of the group completed; this routine clears the
+    flag and re-evaluates each parked sibling so it can auto-approve (or fall
+    out to review for its own reasons) like any normally-completing disc.
+    """
+    import json as _json
+
+    async with async_session() as session:
+        siblings = await session.execute(
+            select(Job, JobMetadata)
+            .join(JobMetadata, Job.id == JobMetadata.job_id)
+            .where(
+                Job.album_group == album_group,
+                Job.id != exclude_job_id,
+                Job.status == "review",
+            )
+        )
+        to_wake: list[str] = []
+        for sib_job, sib_meta in siblings.all():
+            try:
+                sib_issues = _json.loads(sib_meta.issues) if sib_meta.issues else []
+            except (ValueError, TypeError):
+                sib_issues = []
+            if "waiting_for_group" not in sib_issues:
+                continue
+            sib_issues = [i for i in sib_issues if i != "waiting_for_group"]
+            sib_meta.issues = _json.dumps(sib_issues, ensure_ascii=False) if sib_issues else None
+            # Snap status off review so _check_approval treats it as a fresh
+            # decision. We re-park it (status=review) below if the rerun
+            # decides the metadata still isn't auto-approvable.
+            sib_job.status = "encoding"
+            sib_meta.needs_review = False
+            to_wake.append(sib_job.id)
+        await session.commit()
+
+    for sib_id in to_wake:
+        logger.info(
+            "Re-evaluating group sibling %s after group %s finished",
+            sib_id, album_group,
+        )
+        await _check_approval(sib_id)
 
 
 async def _schedule_eject_reminder(job_id: str) -> None:
