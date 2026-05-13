@@ -16,6 +16,43 @@ MB_BASE = "https://musicbrainz.org/ws/2"
 HEADERS = {"User-Agent": "RipTower/0.1.0 (https://github.com/kouki/rip-tower)"}
 RATE_LIMIT = 1.0  # 1 request per second
 
+# CD-family media we'll count as discs of a release. The exact-match
+# `format == "CD"` filter we used to apply silently dropped SHM-CD/HQCD/etc.
+# releases — and the fallback (count all media) then pulled DVD-Video bonus
+# discs into total_discs, so 2-disc CD sets with a DVD got tagged total_discs=3.
+_CD_FORMATS = frozenset({
+    "CD",
+    "CD-R",
+    "8cm CD",
+    "Data CD",  # ripper will still skip non-audio tracks; keep counted as a disc
+    "Enhanced CD",
+    "Copy Control CD",
+    "HDCD",
+    "HQCD",
+    "SHM-CD",
+    "UHQCD",
+    "Blu-spec CD",
+    "Blu-spec CD2",
+    "CD+G",
+    "DTS CD",
+    "Hybrid SACD",  # has a CD layer; ripable
+    "XRCD",
+})
+
+
+def _is_cd_medium(medium: dict) -> bool:
+    """Whether a MusicBrainz medium represents a ripable CD-family disc.
+
+    Releases routinely bundle a DVD-Video or Blu-ray bonus disc with the audio
+    CDs; counting them inflates total_discs and confuses album_group/disc tags.
+    Treat missing/unknown format as CD (conservative — most releases that
+    omit format are plain CDs).
+    """
+    fmt = medium.get("format")
+    if not fmt:
+        return True
+    return fmt in _CD_FORMATS
+
 
 class MusicBrainzSource(MetadataSource):
     """MusicBrainz source.
@@ -150,10 +187,7 @@ class MusicBrainzSource(MetadataSource):
                             if isinstance(ac[0], dict) else str(ac[0])
                         )
 
-                    media = [
-                        m for m in release.get("media", [])
-                        if m.get("format") == "CD"
-                    ]
+                    media = [m for m in release.get("media", []) if _is_cd_medium(m)]
                     if not media:
                         media = release.get("media", [])
                     total_discs = len(media)
@@ -356,7 +390,7 @@ class MusicBrainzSource(MetadataSource):
             logger.exception("MB release detail fetch failed for %s", release_id)
             return [], 1, 1
 
-        media = [m for m in data.get("media", []) if m.get("format") == "CD"]
+        media = [m for m in data.get("media", []) if _is_cd_medium(m)]
         if not media:
             media = data.get("media", [])
         total_discs = len(media)

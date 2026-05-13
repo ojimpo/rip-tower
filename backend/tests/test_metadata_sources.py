@@ -297,6 +297,66 @@ async def test_mb_disc_id_mode_uses_toc_submission(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mb_disc_id_excludes_dvd_video_from_total_discs(monkeypatch):
+    """A release with 2 CDs + 1 DVD-Video must report total_discs=2, not 3.
+
+    Real case: MB release 20e53edf-…-e6113087c559 has disc1=SHM-CD,
+    disc2=SHM-CD, disc3=DVD-Video. The bug was the format filter
+    matching only exact "CD", falling back to "all media" when SHM-CD
+    didn't match, then counting the DVD-Video bonus disc.
+    """
+    from backend.metadata.sources import musicbrainz as mb_mod
+
+    def toc_responder(url, params):
+        return _Resp(200, {"releases": [{
+            "id": "rel-mixed",
+            "title": "Mixed Media Release",
+            "artist-credit": [{"name": "Some Artist"}],
+            "date": "2010",
+            "media": [
+                {
+                    "format": "SHM-CD",
+                    "position": 1,
+                    "track-count": 10,
+                    "tracks": [{"recording": {"title": f"D1-{i}"}} for i in range(1, 11)],
+                },
+                {
+                    "format": "SHM-CD",
+                    "position": 2,
+                    "track-count": 10,
+                    "tracks": [{"recording": {"title": f"D2-{i}"}} for i in range(1, 11)],
+                },
+                {
+                    "format": "DVD-Video",
+                    "position": 3,
+                    "track-count": 1,
+                    "tracks": [{"recording": {"title": "Bonus Footage"}}],
+                },
+            ],
+        }]})
+
+    _patch_httpx(monkeypatch, mb_mod, {
+        "https://musicbrainz.org/ws/2/discid/-": toc_responder,
+    })
+
+    src = MusicBrainzSource(mode="disc_id")
+    identity = SimpleNamespace(
+        disc_id="abc12345",
+        track_count=10,
+        offsets=[150] * 10,
+        leadout=2400,
+        total_seconds=2400,
+    )
+    candidates = await src.search(identity, hints=None)
+
+    assert candidates
+    assert candidates[0]["total_discs"] == 2, (
+        f"DVD-Video bonus disc should not count toward total_discs "
+        f"(got {candidates[0]['total_discs']})"
+    )
+
+
+@pytest.mark.asyncio
 async def test_mb_disc_id_mode_no_offsets_returns_empty(monkeypatch):
     """Restored identities from older jobs may lack offsets/leadout; without
     them we can't synthesize a TOC, so skip cleanly rather than 400 the API."""
