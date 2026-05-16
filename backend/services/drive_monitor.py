@@ -271,7 +271,16 @@ async def _trigger_auto_rip(drive_id: str, source_type: str) -> None:
 
 
 async def _rescan_drives() -> None:
-    """Lightweight rescan: update drive paths and trigger auto-rip without spawning a new watcher."""
+    """Idempotent rescan: only touch DB when scan results differ from current state.
+
+    The periodic rescan from `_poll_disc_status` fires every ~30 s. The previous
+    implementation wiped every drive's `current_path` to None before re-populating,
+    which (1) made `current_path` momentarily None even when nothing changed —
+    blowing up rips that started in that window — and (2) spammed
+    "Drive reconnected" every cycle. Now we diff against scan results and only
+    touch records that actually changed. Ripper re-reads `current_path` per track,
+    so updating mid-rip on USB re-enumeration lets later tracks recover.
+    """
     from backend.database import async_session
     from backend.models import Drive, Job
     from backend.services.websocket import broadcast
@@ -279,53 +288,83 @@ async def _rescan_drives() -> None:
 
     auto_rip_candidates: list[tuple[str, str]] = []
 
+    scanned = scan_drives()
+    scanned_by_serial = {info["serial"]: info for info in scanned}
+
     async with async_session() as session:
-        # Mark all drives as disconnected
-        result = await session.execute(select(Drive))
-        for drive in result.scalars():
-            drive.current_path = None
-            drive.cached_disc_id = None
-            drive.cached_artist = None
-            drive.cached_album = None
-            drive.cached_track_count = None
-        await session.commit()
+        existing_result = await session.execute(select(Drive))
+        existing_drives = list(existing_result.scalars())
+        existing_serials = {d.drive_id for d in existing_drives}
 
-        # Scan and update
-        for info in scan_drives():
-            result = await session.execute(
-                select(Drive).where(Drive.drive_id == info["serial"])
-            )
-            drive = result.scalar_one_or_none()
-            if drive:
+        newly_connected: list[Drive] = []
+
+        for drive in existing_drives:
+            info = scanned_by_serial.get(drive.drive_id)
+            if info:
+                if drive.current_path == info["path"]:
+                    continue
+                old_path = drive.current_path
                 drive.current_path = info["path"]
-                logger.info("Drive reconnected: %s (%s) at %s", drive.name, drive.drive_id, info["path"])
-            else:
-                # Check for legacy fallback serial to migrate
-                drive = await _migrate_legacy_drive(session, info)
-                if not drive:
-                    drive = Drive(
-                        drive_id=info["serial"],
-                        name=info["model"] or info["serial"][:16],
-                        current_path=info["path"],
+                if old_path is None:
+                    logger.info(
+                        "Drive reconnected: %s (%s) at %s",
+                        drive.name, drive.drive_id, info["path"],
                     )
-                    session.add(drive)
-                    logger.info("New drive registered: %s at %s", info["serial"], info["path"])
+                    newly_connected.append(drive)
+                else:
+                    logger.warning(
+                        "Drive path changed: %s (%s) %s -> %s",
+                        drive.name, drive.drive_id, old_path, info["path"],
+                    )
+                await broadcast("drive:connected", {
+                    "drive_id": drive.drive_id,
+                    "name": drive.name,
+                    "path": info["path"],
+                })
+            else:
+                if drive.current_path is None:
+                    continue
+                logger.info("Drive disconnected: %s (%s)", drive.name, drive.drive_id)
+                drive.current_path = None
+                drive.cached_disc_id = None
+                drive.cached_artist = None
+                drive.cached_album = None
+                drive.cached_track_count = None
+                await broadcast("drive:disconnected", {
+                    "drive_id": drive.drive_id,
+                    "name": drive.name,
+                })
 
+        for info in scanned:
+            if info["serial"] in existing_serials:
+                continue
+            drive = await _migrate_legacy_drive(session, info)
+            if not drive:
+                drive = Drive(
+                    drive_id=info["serial"],
+                    name=info["model"] or info["serial"][:16],
+                    current_path=info["path"],
+                )
+                session.add(drive)
+                logger.info("New drive registered: %s at %s", info["serial"], info["path"])
+            newly_connected.append(drive)
             await broadcast("drive:connected", {
                 "drive_id": drive.drive_id,
                 "name": drive.name,
                 "path": info["path"],
             })
 
-            if drive.auto_rip:
-                active_job = await session.execute(
-                    select(Job)
-                    .where(Job.drive_id == drive.drive_id)
-                    .where(Job.status.notin_(["complete", "error"]))
-                    .limit(1)
-                )
-                if not active_job.scalar_one_or_none():
-                    auto_rip_candidates.append((drive.drive_id, drive.auto_rip_source_type))
+        for drive in newly_connected:
+            if not drive.auto_rip:
+                continue
+            active_job = await session.execute(
+                select(Job)
+                .where(Job.drive_id == drive.drive_id)
+                .where(Job.status.notin_(["complete", "error"]))
+                .limit(1)
+            )
+            if not active_job.scalar_one_or_none():
+                auto_rip_candidates.append((drive.drive_id, drive.auto_rip_source_type))
 
         await session.commit()
 

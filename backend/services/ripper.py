@@ -38,7 +38,6 @@ async def rip_disc(job_id: str, drive_id: str, identity) -> None:
         drive = await session.get(Drive, drive_id)
         if not drive or not drive.current_path:
             raise RuntimeError(f"Drive {drive_id} not connected")
-        dev_path = drive.current_path
 
         tracks = await session.execute(
             select(Track)
@@ -49,6 +48,14 @@ async def rip_disc(job_id: str, drive_id: str, identity) -> None:
 
     total = identity.audio_track_count or len(tracks) or identity.track_count
     for track in tracks:
+        # Re-read current_path before each track so a mid-rip USB re-enumeration
+        # (e.g. /dev/sr1 -> /dev/sr4 with the same serial) doesn't condemn every
+        # remaining track to a stale dev node.
+        async with async_session() as session:
+            drive = await session.get(Drive, drive_id)
+            if not drive or not drive.current_path:
+                raise RuntimeError(f"Drive {drive_id} not connected")
+            dev_path = drive.current_path
         await _rip_track(job_id, track.track_num, dev_path, output_dir, total)
 
 
