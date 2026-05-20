@@ -225,7 +225,7 @@ async def start_monitoring() -> None:
                 active_job = await session.execute(
                     select(Job)
                     .where(Job.drive_id == drive.drive_id)
-                    .where(Job.status.notin_(["complete", "error"]))
+                    .where(Job.status.notin_(["complete", "error", "review"]))
                     .limit(1)
                 )
                 if not active_job.scalar_one_or_none():
@@ -360,7 +360,7 @@ async def _rescan_drives() -> None:
             active_job = await session.execute(
                 select(Job)
                 .where(Job.drive_id == drive.drive_id)
-                .where(Job.status.notin_(["complete", "error"]))
+                .where(Job.status.notin_(["complete", "error", "review"]))
                 .limit(1)
             )
             if not active_job.scalar_one_or_none():
@@ -492,7 +492,7 @@ async def _poll_disc_status() -> None:
                                 active_job = await session.execute(
                                     select(Job)
                                     .where(Job.drive_id == drive.drive_id)
-                                    .where(Job.status.notin_(["complete", "error"]))
+                                    .where(Job.status.notin_(["complete", "error", "review"]))
                                     .limit(1)
                                 )
                                 if not active_job.scalar_one_or_none():

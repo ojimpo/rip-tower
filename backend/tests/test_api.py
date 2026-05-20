@@ -36,6 +36,55 @@ class TestDrivesAPI:
         assert data[0]["name"] == "Test Drive"
         assert data[0]["current_path"] == "/dev/sr0"
 
+    @pytest.mark.asyncio
+    async def test_review_job_does_not_block_drive(self, client, db_session):
+        """A job parked in review should not claim the drive's active slot —
+        the user must be able to swap the disc and start a fresh rip."""
+        drive = Drive(
+            drive_id="usb-api-review",
+            name="Drive-A",
+            current_path="/dev/sr0",
+        )
+        db_session.add(drive)
+        db_session.add(Job(
+            id="job-review",
+            status="review",
+            source_type="owned",
+            drive_id="usb-api-review",
+        ))
+        await db_session.commit()
+
+        resp = await client.get("/api/drives")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["active_job_id"] is None
+        assert data[0]["active_job_status"] is None
+
+    @pytest.mark.asyncio
+    async def test_running_job_blocks_drive(self, client, db_session):
+        """Sanity check: a still-running job (e.g. ripping) must claim the
+        drive — otherwise we'd let a second rip race the first."""
+        drive = Drive(
+            drive_id="usb-api-busy",
+            name="Drive-B",
+            current_path="/dev/sr0",
+        )
+        db_session.add(drive)
+        db_session.add(Job(
+            id="job-ripping",
+            status="ripping",
+            source_type="owned",
+            drive_id="usb-api-busy",
+        ))
+        await db_session.commit()
+
+        resp = await client.get("/api/drives")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data[0]["active_job_id"] == "job-ripping"
+        assert data[0]["active_job_status"] == "ripping"
+
 
 class TestJobsAPI:
     """Tests for GET /api/jobs."""

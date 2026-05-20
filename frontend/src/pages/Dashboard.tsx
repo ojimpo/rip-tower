@@ -602,13 +602,9 @@ export default function Dashboard() {
                       {isOnline && hasActiveJob ? (
                         <Link
                           to={`/job/${drive.active_job_id}`}
-                          className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition ${
-                            drive.active_job_status === "review"
-                              ? "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
-                              : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25"
-                          }`}
+                          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition"
                         >
-                          {drive.active_job_status === "review" ? "Review" : "Ripping..."}
+                          Ripping...
                         </Link>
                       ) : isOnline && drive.has_disc ? (
                         <button

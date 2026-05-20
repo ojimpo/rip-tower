@@ -53,11 +53,15 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
         else:
             has_disc = False
             tray_open = False
+        # `review` is intentionally excluded from "active" here so a parked
+        # review job doesn't block the drive — the user can swap the disc and
+        # start a fresh rip while the previous job stays parked elsewhere.
+        _DRIVE_ACTIVE_EXCLUDED = ["complete", "error", "review"]
         if drive.current_path:
             active_job = await session.execute(
                 select(Job)
                 .where(Job.drive_id == drive.drive_id)
-                .where(Job.status.notin_(["complete", "error"]))
+                .where(Job.status.notin_(_DRIVE_ACTIVE_EXCLUDED))
                 .order_by(Job.created_at.desc())
                 .limit(1)
             )
@@ -86,11 +90,12 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                 "track_count": drive.cached_track_count,
             }
 
-        # Check if there's an active (non-complete/error) job on this drive
+        # Surface only running jobs as "active" on the drive — review is
+        # excluded (see above) so the Rip button stays available.
         active_job_result = await session.execute(
             select(Job)
             .where(Job.drive_id == drive.drive_id)
-            .where(Job.status.notin_(["complete", "error"]))
+            .where(Job.status.notin_(_DRIVE_ACTIVE_EXCLUDED))
             .order_by(Job.created_at.desc())
             .limit(1)
         )
