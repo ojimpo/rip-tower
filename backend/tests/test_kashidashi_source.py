@@ -16,6 +16,8 @@ from backend.metadata.sources import kashidashi as kashidashi_mod
 from backend.metadata.sources.kashidashi import (
     KashidashiSource,
     _recency_fallback_candidates,
+    fetch_active_borrowed_items,
+    kashidashi_match_score,
 )
 
 
@@ -173,3 +175,75 @@ async def test_search_skips_fallback_when_exact_discid_matched(monkeypatch):
     # Only the exact-match candidate, no fallback duplicate
     assert len(out) == 1
     assert out[0]["confidence"] == 95
+
+
+# ───────── kashidashi_match_score (resolver boost helper) ─────────
+
+
+def test_match_score_strong_match_on_both_fields():
+    items = [_item(artist="宮本浩次", title="ROMANCE")]
+    item, art, alb = kashidashi_match_score("宮本浩次", "ROMANCE", items)
+    assert item is items[0]
+    assert art >= 0.6 and alb >= 0.6
+
+
+def test_match_score_no_match_returns_low_scores():
+    items = [_item(artist="宮本浩次", title="ROMANCE")]
+    item, art, alb = kashidashi_match_score(
+        "Crystal Lewis", "Simply the Best", items,
+    )
+    # Some non-zero overlap is possible (latin chars) but well under threshold.
+    assert art < 0.6 or alb < 0.6
+
+
+def test_match_score_uses_metadata_fields_when_plain_blank():
+    items = [_item(
+        artist="", title="",
+        metadata_artist="宮本浩次", metadata_album="ROMANCE",
+    )]
+    item, art, alb = kashidashi_match_score("宮本浩次", "ROMANCE", items)
+    assert item is items[0]
+    assert art >= 0.6 and alb >= 0.6
+
+
+def test_match_score_picks_best_across_multiple_items():
+    items = [
+        _item(id=1, artist="Other", title="Other Album"),
+        _item(id=2, artist="宮本浩次", title="ROMANCE"),
+        _item(id=3, artist="ポケットビスケッツ", title="THANKS"),
+    ]
+    item, art, alb = kashidashi_match_score("宮本浩次", "ROMANCE", items)
+    assert item["id"] == 2
+
+
+def test_match_score_handles_empty_candidate():
+    items = [_item()]
+    item, art, alb = kashidashi_match_score("", "", items)
+    assert item is None
+    assert art == 0.0 and alb == 0.0
+
+
+# ───────── fetch_active_borrowed_items ─────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_active_borrowed_items_filters_returned_and_ripped(monkeypatch):
+    payload = [
+        _item(id=1),
+        _item(id=2, returned_at="2026-05-10T00:00:00Z"),
+        _item(id=3, ripped_at="2026-05-10T00:00:00Z"),
+        _item(id=4),
+    ]
+    _patch_kashidashi_http(monkeypatch, payload)
+    out = await fetch_active_borrowed_items()
+    assert sorted(it["id"] for it in out) == [1, 4]
+
+
+@pytest.mark.asyncio
+async def test_fetch_active_borrowed_items_returns_empty_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(
+        kashidashi_mod, "get_config",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(kashidashi_url="")),
+    )
+    out = await fetch_active_borrowed_items()
+    assert out == []

@@ -177,6 +177,23 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         if len(albums_seen) > 1:
             issues.append("album_contradiction")
 
+    # Kashidashi cross-check: every candidate that maps to a currently-borrowed
+    # CD carries a `kashidashi_id` (kashidashi-source) or `kashidashi_confirmed`
+    # (resolver boost). When best disagrees with the library on which item the
+    # user is holding, force review.
+    best_item = _kashidashi_item_id(best)
+    other_items = {_kashidashi_item_id(c) for c in candidates[1:]}
+    other_items.discard(None)
+    if best_item is None and other_items:
+        # Best wasn't matched to any borrowed CD, but some candidate was — the
+        # user is likely holding one of those library CDs, not what best claims.
+        issues.append("kashidashi_mismatch")
+    elif best_item is not None and other_items - {best_item}:
+        # Best matched a borrowed CD, but another candidate pointed at a
+        # *different* borrowed CD. Pool-of-multiple-borrows is inherently
+        # ambiguous from disc-ID alone — make the user confirm.
+        issues.append("kashidashi_ambiguous")
+
     # Determine review need
     confidence = best.confidence or 0
     needs_review = confidence < 50 or bool(issues)
@@ -294,6 +311,30 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         job_id, artist, album, confidence, issues,
     )
     return meta
+
+
+def _kashidashi_item_id(candidate: MetadataCandidate | None) -> int | None:
+    """Return the kashidashi item id this candidate maps to, if any.
+
+    Two sources of evidence:
+      - `kashidashi_id` is set by KashidashiSource for its own candidates.
+      - `kashidashi_confirmed.item_id` is set by the resolver's cross-reference
+        boost on non-kashidashi candidates that fuzzy-match a borrowed CD.
+    """
+    if not candidate or not candidate.evidence:
+        return None
+    try:
+        ev = json.loads(candidate.evidence)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(ev, dict):
+        return None
+    confirmed = ev.get("kashidashi_confirmed")
+    if isinstance(confirmed, dict) and confirmed.get("item_id"):
+        return confirmed["item_id"]
+    if ev.get("kashidashi_id"):
+        return ev["kashidashi_id"]
+    return None
 
 
 async def _ensure_placeholder_metadata(job_id: str) -> None:

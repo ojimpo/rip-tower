@@ -147,6 +147,64 @@ class KashidashiSource(MetadataSource):
 _FALLBACK_WINDOW_DAYS = 7
 
 
+async def fetch_active_borrowed_items() -> list[dict]:
+    """Return kashidashi CD items currently checked out (not returned, not ripped).
+
+    Shared by KashidashiSource.search() and the resolver's cross-reference
+    boost — both need the same "what's currently in the user's hands" list,
+    so fetching it once here avoids divergence. Returns an empty list if
+    kashidashi isn't configured or the API call fails.
+    """
+    base_url = get_config().integrations.kashidashi_url
+    if not base_url:
+        return []
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            resp = await client.get(f"{base_url}/api/items", params={"type": "cd"})
+            if resp.status_code != 200:
+                return []
+            items = resp.json()
+        except Exception:
+            logger.exception("Kashidashi API error")
+            return []
+    return [
+        it for it in items
+        if not it.get("returned_at") and not it.get("ripped_at")
+    ]
+
+
+def kashidashi_match_score(
+    candidate_artist: str,
+    candidate_album: str,
+    items: list[dict],
+) -> tuple[dict | None, float, float]:
+    """Find the best fuzzy match between a candidate and the borrowed pool.
+
+    Returns (item, artist_sim, album_sim) for the highest combined similarity,
+    or (None, 0.0, 0.0) if neither side has any text to compare. Both `artist`
+    and `metadata_artist` (same for album) on the item are tried so that
+    library staff's free-text spelling and resolver-corrected metadata both
+    count as evidence.
+    """
+    if not candidate_artist and not candidate_album:
+        return None, 0.0, 0.0
+    best: tuple[dict | None, float, float] = (None, 0.0, 0.0)
+    for it in items:
+        item_artists = [it.get("artist") or "", it.get("metadata_artist") or ""]
+        item_albums = [it.get("title") or "", it.get("metadata_album") or ""]
+        art_sim = max(
+            (similarity(candidate_artist, a) for a in item_artists if a),
+            default=0.0,
+        )
+        alb_sim = max(
+            (similarity(candidate_album, a) for a in item_albums if a),
+            default=0.0,
+        )
+        if art_sim + alb_sim > best[1] + best[2]:
+            best = (it, art_sim, alb_sim)
+    return best
+
+
 def _recency_fallback_candidates(
     items: list[dict], base_url: str, track_count: int
 ) -> list[dict]:

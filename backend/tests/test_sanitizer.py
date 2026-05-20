@@ -192,3 +192,122 @@ async def test_sanitize_candidates_no_candidates_preserves_existing_disc_info(
     assert meta.total_discs == 3
     assert meta.needs_review is True
     assert json.loads(meta.issues) == ["no_metadata"]
+
+
+# ───────────────── sanitize_candidates: kashidashi cross-check ─────────────────
+
+
+def _confirmed_evidence(item_id: int) -> str:
+    return json.dumps({
+        "kashidashi_confirmed": {
+            "item_id": item_id, "artist_sim": 1.0, "album_sim": 1.0, "boost": 25,
+        }
+    }, ensure_ascii=False)
+
+
+def _recency_evidence(item_id: int) -> str:
+    return json.dumps({
+        "kashidashi_id": item_id,
+        "match": "recency_fallback",
+        "days_since_borrow": 0,
+        "pool_size": 2,
+    }, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_kashidashi_mismatch_when_best_lacks_match_but_others_have(
+    monkeypatch, async_session_maker,
+):
+    """Best has no kashidashi tag, but a lower candidate maps to a borrowed
+    CD — user is probably holding that other CD, force review."""
+    from backend.models import Job, MetadataCandidate, Track
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-mm", drive_id="d", disc_id="dx"))
+        for n in range(1, 4):
+            s.add(Track(job_id="job-mm", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-mm", source="musicbrainz",
+            artist="Wrong", album="Wrong Album", confidence=90,
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-mm", source="kashidashi",
+            artist="Right", album="Right Album", confidence=70,
+            evidence=_recency_evidence(123),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-mm")
+    assert result is not None
+    issues = json.loads(result.issues)
+    assert "kashidashi_mismatch" in issues
+    assert result.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_kashidashi_ambiguous_when_best_and_other_point_at_different_items(
+    monkeypatch, async_session_maker,
+):
+    """Best matched borrowed CD A, but another candidate matched borrowed CD B —
+    the system can't tell which of the user's CDs is on the spindle, force review."""
+    from backend.models import Job, MetadataCandidate, Track
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-amb", drive_id="d", disc_id="dx"))
+        for n in range(1, 4):
+            s.add(Track(job_id="job-amb", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-amb", source="musicbrainz",
+            artist="宮本浩次", album="ROMANCE", confidence=90,
+            evidence=_confirmed_evidence(799),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-amb", source="itunes",
+            artist="ポケットビスケッツ", album="Thanks", confidence=55,
+            evidence=_confirmed_evidence(800),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-amb")
+    assert result is not None
+    issues = json.loads(result.issues)
+    assert "kashidashi_ambiguous" in issues
+    assert result.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_kashidashi_no_flag_when_best_and_others_share_item(
+    monkeypatch, async_session_maker,
+):
+    """Single-CD borrow happy path: best matches the only borrowed CD; a
+    kashidashi recency candidate for that same CD is also present. They share
+    the item id → no ambiguity, no mismatch."""
+    from backend.models import Job, MetadataCandidate, Track
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-ok", drive_id="d", disc_id="dx"))
+        for n in range(1, 4):
+            s.add(Track(job_id="job-ok", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-ok", source="musicbrainz",
+            artist="宮本浩次", album="ROMANCE", confidence=95,
+            evidence=_confirmed_evidence(799),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-ok", source="kashidashi",
+            artist="宮本浩次", album="ROMANCE", confidence=70,
+            evidence=_recency_evidence(799),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-ok")
+    assert result is not None
+    issues = json.loads(result.issues or "[]")
+    assert "kashidashi_mismatch" not in issues
+    assert "kashidashi_ambiguous" not in issues

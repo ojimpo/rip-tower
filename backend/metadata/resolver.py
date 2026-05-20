@@ -4,6 +4,7 @@ Ported from ~/dev/openclaw-cd-rip/scripts/metadata_resolver.py.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Optional
 
@@ -91,6 +92,14 @@ async def resolve(
     for source, result in zip(phase2_sources, phase2_results):
         if isinstance(result, Exception):
             logger.warning("Phase 2 source %s failed: %s", source.name, result)
+
+    # Cross-reference candidates against currently-borrowed kashidashi items.
+    # When MB's disc-ID lookup returns multiple releases sharing one TOC (or a
+    # different user's mis-submission for an unrelated disc-ID), a candidate
+    # that matches a CD the user is physically holding is far stronger evidence
+    # than confidence alone. Run before sanitize so the boosted confidence
+    # flows into ranking.
+    await _boost_kashidashi_matches(job_id)
 
     # Sanitize and rank
     from backend.metadata.sanitizer import sanitize_candidates
@@ -234,6 +243,77 @@ async def _match_kashidashi(job_id: str, identity) -> None:
     from backend.metadata.sources.kashidashi import match_kashidashi
 
     await match_kashidashi(job_id, identity)
+
+
+# Confidence boost applied when a candidate matches a borrowed kashidashi item
+# on both artist and album. +25 is large enough to flip same-confidence ties
+# (e.g. three MB releases at 90 sharing one disc-ID) toward the borrowed disc,
+# but small enough that a genuinely high-confidence non-library candidate can
+# still win against a low-conf library guess that happens to match.
+_KASHIDASHI_BOOST = 25
+_KASHIDASHI_SIM_THRESHOLD = 0.6
+
+
+async def _boost_kashidashi_matches(job_id: str) -> None:
+    """Boost candidates whose artist+album matches a currently-borrowed CD.
+
+    Records `kashidashi_confirmed` evidence on every matched candidate so
+    sanitizer can flag a `kashidashi_mismatch` issue when the ranked-best
+    candidate disagrees with the user's physical disc.
+
+    Excludes kashidashi-sourced candidates from the boost — they are already
+    library-evidenced by construction, double-counting would let an empty-text
+    recency-fallback row overtake a clearly-named MB candidate that also
+    matches.
+    """
+    from backend.metadata.sources.kashidashi import (
+        fetch_active_borrowed_items,
+        kashidashi_match_score,
+    )
+
+    items = await fetch_active_borrowed_items()
+    if not items:
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == job_id)
+        )
+        candidates = list(result.scalars().all())
+
+        for c in candidates:
+            if c.source == "kashidashi":
+                continue
+            artist = c.artist or ""
+            album = c.album or ""
+            if not artist or not album:
+                continue
+            item, art_sim, alb_sim = kashidashi_match_score(artist, album, items)
+            if item is None:
+                continue
+            if art_sim < _KASHIDASHI_SIM_THRESHOLD or alb_sim < _KASHIDASHI_SIM_THRESHOLD:
+                continue
+            old_conf = c.confidence or 0
+            c.confidence = min(old_conf + _KASHIDASHI_BOOST, 100)
+            evidence: dict = {}
+            if c.evidence:
+                try:
+                    evidence = json.loads(c.evidence)
+                except (json.JSONDecodeError, TypeError):
+                    evidence = {}
+            evidence["kashidashi_confirmed"] = {
+                "item_id": item.get("id"),
+                "artist_sim": round(art_sim, 2),
+                "album_sim": round(alb_sim, 2),
+                "boost": _KASHIDASHI_BOOST,
+            }
+            c.evidence = json.dumps(evidence, ensure_ascii=False)
+            logger.info(
+                "Boosted candidate id=%s (%s/%s) by +%d for kashidashi item %s",
+                c.id, c.source, c.artist, _KASHIDASHI_BOOST, item.get("id"),
+            )
+
+        await session.commit()
 
 
 async def _sync_from_group(job_id: str, meta: Any) -> None:

@@ -318,3 +318,191 @@ async def test_auto_match_concurrent_resolution_keeps_group_unified(
         f"Concurrent _auto_match_album_group split the album into different "
         f"groups: disc-a={ja.album_group} disc-b={jb.album_group}"
     )
+
+
+# ───────── _boost_kashidashi_matches ─────────
+
+
+def _kashidashi_item(**overrides):
+    base = {
+        "id": 1,
+        "artist": "宮本浩次",
+        "title": "ROMANCE",
+        "metadata_artist": None,
+        "metadata_album": None,
+        "metadata_track_count": None,
+        "borrowed_date": datetime.now(timezone.utc).date().isoformat(),
+        "returned_at": None,
+        "ripped_at": None,
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_boost_flips_tied_disc_id_candidates(
+    monkeypatch, async_session_maker,
+):
+    """Three MB candidates tied at conf=90 from a disc-ID collision: the one
+    matching a borrowed CD should win after the boost."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return [_kashidashi_item(id=42, artist="宮本浩次", title="ROMANCE")]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-tie", drive_id="d", disc_id="dx"))
+        for i, (artist, album) in enumerate([
+            ("Crystal Lewis", "Simply the Best"),
+            ("The Jamgrass Slammers", "JamGrass: A Phish Tribute"),
+            ("宮本浩次", "ROMANCE"),
+        ]):
+            s.add(MetadataCandidate(
+                job_id="job-tie", source="musicbrainz",
+                artist=artist, album=album, confidence=90,
+            ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-tie")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        result = await s.execute(
+            select(MetadataCandidate)
+            .where(MetadataCandidate.job_id == "job-tie")
+            .order_by(MetadataCandidate.confidence.desc())
+        )
+        cands = list(result.scalars())
+
+    assert cands[0].artist == "宮本浩次"
+    assert cands[0].confidence > 90  # boosted past the tie
+    assert "kashidashi_confirmed" in (cands[0].evidence or "")
+    # Non-matching candidates stay at 90
+    others = [c for c in cands if c.artist != "宮本浩次"]
+    assert all(c.confidence == 90 for c in others)
+
+
+@pytest.mark.asyncio
+async def test_boost_tags_each_match_with_its_borrowed_item(
+    monkeypatch, async_session_maker,
+):
+    """For the xtc096hn case (MB false-positive ROMANCE at 65 vs iTunes correct
+    THANKS at 30) the +25 boost alone can't close the gap. What matters is that
+    each candidate's evidence records which borrowed item it maps to — sanitize
+    uses those item ids to raise kashidashi_ambiguous when best and a lower
+    candidate point at *different* CDs in the user's hands."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return [
+            _kashidashi_item(id=799, artist="宮本浩次", title="ROMANCE"),
+            _kashidashi_item(id=800, artist="ポケットビスケッツ", title="THANKS"),
+        ]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-xtc", drive_id="d", disc_id="dx2"))
+        s.add(MetadataCandidate(
+            job_id="job-xtc", source="musicbrainz",
+            artist="宮本浩次", album="ROMANCE", confidence=65,
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-xtc", source="itunes",
+            artist="ポケットビスケッツ", album="Thanks", confidence=30,
+        ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-xtc")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        result = await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-xtc")
+        )
+        by_source = {c.source: c for c in result.scalars()}
+
+    import json as _json
+    mb_ev = _json.loads(by_source["musicbrainz"].evidence)
+    it_ev = _json.loads(by_source["itunes"].evidence)
+    assert mb_ev["kashidashi_confirmed"]["item_id"] == 799
+    assert it_ev["kashidashi_confirmed"]["item_id"] == 800
+    assert by_source["musicbrainz"].confidence == 90  # 65 + 25
+    assert by_source["itunes"].confidence == 55       # 30 + 25
+
+
+@pytest.mark.asyncio
+async def test_boost_skips_when_no_items(monkeypatch, async_session_maker):
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return []
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-none", drive_id="d", disc_id="dx"))
+        s.add(MetadataCandidate(
+            job_id="job-none", source="musicbrainz",
+            artist="A", album="B", confidence=80,
+        ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-none")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        result = await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-none")
+        )
+        cands = list(result.scalars())
+
+    assert cands[0].confidence == 80
+    assert cands[0].evidence is None
+
+
+@pytest.mark.asyncio
+async def test_boost_excludes_kashidashi_source_candidates(
+    monkeypatch, async_session_maker,
+):
+    """kashidashi-source candidates already encode the library evidence in their
+    base confidence — boosting them again would compound the same signal."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return [_kashidashi_item(id=1, artist="宮本浩次", title="ROMANCE")]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-k", drive_id="d", disc_id="dx"))
+        s.add(MetadataCandidate(
+            job_id="job-k", source="kashidashi",
+            artist="宮本浩次", album="ROMANCE", confidence=70,
+        ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-k")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        result = await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-k")
+        )
+        c = list(result.scalars())[0]
+
+    assert c.confidence == 70  # untouched
