@@ -21,6 +21,13 @@ class DiscInfo:
     album: str | None
 
 
+# Borrowed-CD cross-check threshold. Same value as resolver's
+# `_KASHIDASHI_SIM_THRESHOLD` — using a different threshold here would let
+# disc_identify trust a name the resolver would reject (or vice versa) for
+# the same TOC. Keep them aligned.
+_BORROWED_MATCH_THRESHOLD = 0.6
+
+
 async def identify(dev_path: str) -> DiscInfo:
     """Run cd-discid and query MusicBrainz + CDDB in parallel.
 
@@ -60,7 +67,75 @@ async def identify(dev_path: str) -> DiscInfo:
                 artist, album = result
                 break
 
+    artist, album = await _reconcile_with_borrowed(artist, album)
+
     return DiscInfo(disc_id=disc_id, track_count=track_count, artist=artist, album=album)
+
+
+async def _reconcile_with_borrowed(
+    artist: str | None, album: str | None
+) -> tuple[str | None, str | None]:
+    """Override misleading MB/CDDB output when the user is borrowing CDs.
+
+    MB's TOC lookup occasionally returns a release that shares the disc's
+    TOC but is a completely different album (e.g. a Cocco best-of disc
+    matches a Harry Potter audiobook TOC). When that happens, the cached
+    artist/album shown on the drives dashboard actively misleads the user.
+
+    Policy, mirroring resolver._boost_kashidashi_matches:
+      - MB/CDDB hit AND it fuzzy-matches a borrowed CD → trust MB (no-op).
+      - MB/CDDB hit but no borrowed CD matches AND exactly one CD is
+        borrowed-not-yet-ripped → adopt that CD's name (the borrowed list
+        is stronger evidence than a TOC-collided MB release).
+      - MB/CDDB hit but no borrowed CD matches AND multiple CDs are
+        borrowed → can't disambiguate from disc-ID alone; suppress the
+        misleading name (review will surface candidates anyway).
+      - No MB/CDDB hit and exactly one CD is borrowed → adopt that one.
+      - No MB/CDDB hit and multiple CDs are borrowed → leave empty.
+
+    Returns (artist, album), either unchanged or replaced.
+    """
+    from backend.metadata.normalize import similarity
+    from backend.metadata.sources.kashidashi import (
+        fetch_active_borrowed_items,
+        kashidashi_match_score,
+    )
+
+    try:
+        borrowed = await fetch_active_borrowed_items()
+    except Exception:
+        logger.debug("Borrowed-CD fetch failed; keeping raw lookup result")
+        return artist, album
+    if not borrowed:
+        return artist, album
+
+    if artist or album:
+        item, art_sim, alb_sim = kashidashi_match_score(
+            artist or "", album or "", borrowed
+        )
+        if item is not None and (
+            art_sim >= _BORROWED_MATCH_THRESHOLD
+            or alb_sim >= _BORROWED_MATCH_THRESHOLD
+        ):
+            return artist, album
+
+    if len(borrowed) == 1:
+        only = borrowed[0]
+        new_artist = only.get("metadata_artist") or only.get("artist") or None
+        new_album = only.get("metadata_album") or only.get("title") or None
+        if new_artist or new_album:
+            logger.info(
+                "Drive identify: replacing %r/%r with sole borrowed CD %r/%r",
+                artist, album, new_artist, new_album,
+            )
+            return new_artist, new_album
+
+    if artist or album:
+        logger.info(
+            "Drive identify: suppressing %r/%r — does not match any of %d borrowed CDs",
+            artist, album, len(borrowed),
+        )
+    return None, None
 
 
 async def _mb_toc_lookup(
