@@ -72,6 +72,15 @@ class IntegrationsConfig(BaseModel):
     plex_url: str = ""
     plex_token: str = ""
     plex_section_id: Optional[int] = None
+    # Path prefix mapping so the finalizer can ask Plex to rescan a
+    # specific folder rather than the whole section. Plex usually mounts
+    # the library at a different point than rip-tower (e.g. rip-tower
+    # writes to `/mnt/media/music` while Plex sees `/media/music`), and
+    # the path-scoped refresh API requires the path *as Plex sees it*.
+    # When either field is blank, finalize falls back to a section-wide
+    # refresh (which can race two near-simultaneous finalizes).
+    plex_music_host_root: str = ""
+    plex_music_plex_root: str = ""
     llm_api_key: str = ""
     llm_model: str = "haiku"
     kashidashi_url: str = "http://kashidashi-app-web-1:18080"

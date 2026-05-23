@@ -172,7 +172,7 @@ async def finalize(job_id: str) -> bool:
         shutil.rmtree(incoming)
 
     # Plex refresh
-    await _plex_refresh()
+    await _plex_refresh(output_dir)
 
     logger.info("Finalized job %s → %s", job_id, output_dir)
     return True
@@ -314,7 +314,7 @@ async def reapply_metadata(job_id: str) -> None:
             await session.commit()
 
     # Refresh Plex so post-complete edits propagate to the library view.
-    await _plex_refresh()
+    await _plex_refresh(target_dir)
 
     logger.info("Re-applied metadata for job %s → %s", job_id, target_dir)
 
@@ -467,8 +467,17 @@ async def update_kashidashi(job_id: str) -> None:
         )
 
 
-async def _plex_refresh() -> None:
-    """Trigger Plex library refresh via HTTP API."""
+async def _plex_refresh(output_dir: Path | str | None = None) -> None:
+    """Trigger Plex library refresh via HTTP API.
+
+    When `output_dir` is given and the host→Plex path mapping is
+    configured, scope the refresh to just that folder. The section-wide
+    refresh is queued by Plex and tends to drop near-simultaneous
+    requests, so two discs finalized seconds apart can end up with only
+    one folder ingested (Cocco DISC 2 hit this on 2026-05-23 — DISC 1
+    was scanned but DISC 2's brand-new folder was missed entirely).
+    Path-scoped refreshes are independent and don't race.
+    """
     config = get_config()
     plex_url = config.integrations.plex_url
     token = config.integrations.plex_token
@@ -478,13 +487,39 @@ async def _plex_refresh() -> None:
         logger.debug("Plex not configured (url/token/section_id), skipping refresh")
         return
 
+    params: dict[str, str] = {}
+    plex_path = _translate_to_plex_path(output_dir) if output_dir else None
+    if plex_path:
+        params["path"] = plex_path
+
     url = f"{plex_url.rstrip('/')}/library/sections/{section_id}/refresh"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers={"X-Plex-Token": token})
+            resp = await client.get(url, params=params, headers={"X-Plex-Token": token})
         if resp.status_code == 200:
-            logger.info("Plex refresh triggered for section %s", section_id)
+            logger.info(
+                "Plex refresh triggered for section %s%s",
+                section_id, f" path={plex_path}" if plex_path else " (section-wide)",
+            )
         else:
             logger.warning("Plex refresh returned HTTP %s", resp.status_code)
     except Exception:
         logger.warning("Plex refresh failed (non-critical)", exc_info=True)
+
+
+def _translate_to_plex_path(output_dir: Path | str) -> str | None:
+    """Map a host-side output_dir into the path Plex sees, per config.
+
+    Returns None when the mapping isn't configured or the path doesn't
+    start with the configured host root — caller falls back to a
+    section-wide refresh in that case.
+    """
+    config = get_config()
+    host_root = config.integrations.plex_music_host_root.rstrip("/")
+    plex_root = config.integrations.plex_music_plex_root.rstrip("/")
+    if not host_root or not plex_root:
+        return None
+    path_str = str(output_dir)
+    if not path_str.startswith(host_root + "/") and path_str != host_root:
+        return None
+    return plex_root + path_str[len(host_root):]
