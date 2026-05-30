@@ -205,6 +205,98 @@ def kashidashi_match_score(
     return best
 
 
+_ALIAS_SIM_THRESHOLD = 0.6
+
+
+def _mb_release_id(candidate: Any) -> str | None:
+    """The MusicBrainz release id a candidate points at, if any."""
+    if candidate.evidence:
+        try:
+            ev = json.loads(candidate.evidence)
+            if isinstance(ev, dict) and ev.get("mb_release"):
+                return ev["mb_release"]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    url = candidate.source_url or ""
+    if "musicbrainz.org/release/" in url:
+        return url.rstrip("/").split("/")[-1]
+    return None
+
+
+def _is_disc_anchored(candidate: Any) -> bool:
+    """True when the candidate matched the disc by its physical TOC / disc ID.
+
+    Then the album identity is proven by the disc itself, so the kashidashi
+    cross-check only needs to confirm the *artist* to decide a TOC collision.
+    """
+    if not candidate.evidence:
+        return False
+    try:
+        ev = json.loads(candidate.evidence)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(ev, dict) and ev.get("match") in ("toc_submission", "exact_discid")
+
+
+async def best_kashidashi_match(
+    candidate: Any, items: list[dict]
+) -> tuple[dict | None, float, float]:
+    """Like `kashidashi_match_score`, but script-insensitive.
+
+    Tries a direct text match first. If that doesn't clear the bar and the
+    candidate is a MusicBrainz release, it augments the comparison with the
+    release's MB artist/release aliases — so a Japanese borrowed record
+    ("エイミー・ワインハウス") matches an English candidate ("Amy Winehouse").
+    For disc-anchored candidates the album is already proven by the TOC, so a
+    confirmed artist alone suffices; this is what tips a TOC collision toward
+    the CD the user actually borrowed.
+    """
+    artist = candidate.artist or ""
+    album = candidate.album or ""
+
+    item, art_sim, alb_sim = kashidashi_match_score(artist, album, items)
+    if (
+        item is not None
+        and art_sim >= _ALIAS_SIM_THRESHOLD
+        and alb_sim >= _ALIAS_SIM_THRESHOLD
+    ):
+        return item, art_sim, alb_sim
+
+    release_id = _mb_release_id(candidate)
+    if not release_id:
+        return item, art_sim, alb_sim
+
+    from backend.metadata.sources.musicbrainz import fetch_release_artist_aliases
+
+    artist_aliases, release_aliases = await fetch_release_artist_aliases(release_id)
+    if not artist_aliases and not release_aliases:
+        return item, art_sim, alb_sim
+
+    artist_names = [artist, *artist_aliases]
+    album_names = [album, *release_aliases]
+    disc_anchored = _is_disc_anchored(candidate)
+
+    best = (item, art_sim, alb_sim)
+    for it in items:
+        item_artists = [it.get("artist") or "", it.get("metadata_artist") or ""]
+        item_albums = [it.get("title") or "", it.get("metadata_album") or ""]
+        a_sim = max(
+            (similarity(n, a) for n in artist_names if n for a in item_artists if a),
+            default=0.0,
+        )
+        l_sim = max(
+            (similarity(n, a) for n in album_names if n for a in item_albums if a),
+            default=0.0,
+        )
+        # Disc-anchored: the TOC already proves which album this is, so a
+        # cross-script album title must not veto a confirmed-artist match.
+        if disc_anchored and a_sim >= _ALIAS_SIM_THRESHOLD:
+            l_sim = max(l_sim, _ALIAS_SIM_THRESHOLD)
+        if a_sim + l_sim > best[1] + best[2]:
+            best = (it, a_sim, l_sim)
+    return best
+
+
 def _recency_fallback_candidates(
     items: list[dict], base_url: str, track_count: int
 ) -> list[dict]:

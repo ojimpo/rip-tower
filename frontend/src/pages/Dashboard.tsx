@@ -259,7 +259,17 @@ export default function Dashboard() {
   const activeJobs = jobs.filter((j) => !["complete", "error", "review"].includes(j.status));
   const reviewJobs = jobs.filter((j) => j.status === "review");
   const errorJobs = jobs.filter((j) => j.status === "error");
-  const recentComplete = jobs.filter((j) => j.status === "complete").slice(0, 5);
+  // Sort the Recent list by when each job was confirmed (completed_at), not by
+  // when it was created — a job ripped earlier but finalized later should sit
+  // at the top. Fall back to updated_at/created_at when completed_at is absent.
+  const recentComplete = jobs
+    .filter((j) => j.status === "complete")
+    .sort(
+      (a, b) =>
+        new Date(b.completed_at ?? b.updated_at ?? b.created_at).getTime() -
+        new Date(a.completed_at ?? a.updated_at ?? a.created_at).getTime(),
+    )
+    .slice(0, 5);
 
   const needsAttention = [...reviewJobs, ...errorJobs];
 

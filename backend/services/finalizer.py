@@ -447,6 +447,10 @@ async def update_kashidashi(job_id: str) -> None:
         "ripped_at": ripped_iso,
         "metadata_artist": meta.artist if meta else None,
         "metadata_album": meta.album if meta else None,
+        # Write the disc ID back so the *next* time this borrowed CD (or a
+        # re-rip) is seen, kashidashi matches it exactly by disc-ID instead of
+        # falling back to recency — closing the loop that caused mis-matches.
+        "rip_discid": job.disc_id if job else None,
     }
 
     try:

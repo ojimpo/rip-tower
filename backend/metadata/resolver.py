@@ -266,16 +266,31 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
     recency-fallback row overtake a clearly-named MB candidate that also
     matches.
     """
+    from sqlalchemy import func
+
+    from backend.metadata.sanitizer import candidate_expected_track_count
     from backend.metadata.sources.kashidashi import (
+        best_kashidashi_match,
         fetch_active_borrowed_items,
-        kashidashi_match_score,
     )
+    from backend.models import Track
 
     items = await fetch_active_borrowed_items()
     if not items:
         return
 
     async with async_session() as session:
+        # The physical disc's actual track count is a hard cross-check: a
+        # candidate whose release has a different track count cannot be this
+        # disc, so it must not receive a borrowed-CD confidence boost (which
+        # would otherwise push a recency-fallback text match over the
+        # auto-approve line — the o8maxpvg "18-track disc → 11-track LOVE" bug).
+        disc_track_count = (
+            await session.execute(
+                select(func.count(Track.id)).where(Track.job_id == job_id)
+            )
+        ).scalar() or 0
+
         result = await session.execute(
             select(MetadataCandidate).where(MetadataCandidate.job_id == job_id)
         )
@@ -288,7 +303,13 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
             album = c.album or ""
             if not artist or not album:
                 continue
-            item, art_sim, alb_sim = kashidashi_match_score(artist, album, items)
+            expected = candidate_expected_track_count(c)
+            if disc_track_count and expected and expected != disc_track_count:
+                continue
+            # Script-insensitive match: falls back to MusicBrainz artist/release
+            # aliases so a Japanese borrowed record ("エイミー・ワインハウス")
+            # still matches an English MB candidate ("Amy Winehouse").
+            item, art_sim, alb_sim = await best_kashidashi_match(c, items)
             if item is None:
                 continue
             if art_sim < _KASHIDASHI_SIM_THRESHOLD or alb_sim < _KASHIDASHI_SIM_THRESHOLD:

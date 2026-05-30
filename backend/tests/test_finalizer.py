@@ -96,3 +96,59 @@ def test_translate_accepts_path_object(monkeypatch):
         _translate_to_plex_path(Path("/mnt/media/music/Cocco/best"))
         == "/media/music/Cocco/best"
     )
+
+
+# ───────────────── Fix C: rip_discid write-back on finalize ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_kashidashi_writes_rip_discid(monkeypatch, async_session_maker):
+    """Finalize writes the disc-ID back to the matched borrowed item, so the next
+    time this CD (or a re-rip) is seen kashidashi matches it exactly instead of
+    falling back to recency — the loop that caused the disc-swap mismatches."""
+    import httpx
+    from types import SimpleNamespace
+
+    from backend.services import finalizer
+    from backend.models import Job, JobMetadata, KashidashiCandidate
+
+    cfg = SimpleNamespace(
+        integrations=SimpleNamespace(kashidashi_url="http://kashidashi.test")
+    )
+    monkeypatch.setattr("backend.services.finalizer.get_config", lambda: cfg)
+    monkeypatch.setattr(finalizer, "async_session", async_session_maker)
+
+    captured: dict = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def patch(self, url, json=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-rd", drive_id="d", disc_id="d70b3112", status="complete"))
+        s.add(JobMetadata(job_id="job-rd", artist="さだまさし", album="北の国から"))
+        s.add(KashidashiCandidate(job_id="job-rd", item_id=190, matched=True))
+        await s.commit()
+
+    await finalizer.update_kashidashi("job-rd")
+
+    assert captured["url"].endswith("/api/items/190")
+    assert captured["json"]["rip_discid"] == "d70b3112"
+    assert captured["json"]["metadata_artist"] == "さだまさし"
