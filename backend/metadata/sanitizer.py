@@ -21,6 +21,7 @@ from backend.metadata.normalize import (
     extract_disc_info,
     fullwidth_to_halfwidth,
     normalize_various_artists,
+    similarity,
 )
 from backend.models import JobMetadata, MetadataCandidate, Track
 
@@ -186,6 +187,22 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     if expected_track_count and best_expected and best_expected != expected_track_count:
         issues.append("track_count_mismatch")
 
+    # Unanchored identification: when the chosen album came from a text search
+    # that merely echoes a recency-fallback borrowed-CD seed — with nothing
+    # matching the disc by its physical TOC/disc-ID — it's a guess, not a read.
+    # Never let it auto-approve (the o8maxpvg "borrowed LOVE seeded onto an
+    # unrelated disc" failure mode, even when track counts happen to agree).
+    if _candidate_match_kind(best) in ("text_search", "search", None):
+        for c in candidates:
+            if _candidate_match_kind(c) != "recency_fallback":
+                continue
+            if (
+                similarity(best.artist or "", c.artist or "") >= 0.8
+                and similarity(best.album or "", c.album or "") >= 0.8
+            ):
+                issues.append("unanchored_identification")
+                break
+
     # Kashidashi cross-check: every candidate that maps to a currently-borrowed
     # CD carries a `kashidashi_id` (kashidashi-source) or `kashidashi_confirmed`
     # (resolver boost). When best disagrees with the library on which item the
@@ -344,6 +361,21 @@ def _kashidashi_item_id(candidate: MetadataCandidate | None) -> int | None:
     if ev.get("kashidashi_id"):
         return ev["kashidashi_id"]
     return None
+
+
+def _candidate_match_kind(candidate: MetadataCandidate | None) -> str | None:
+    """The `match` provenance in a candidate's evidence, if any.
+
+    e.g. 'toc_submission'/'exact_discid' (disc-anchored), 'text_search'/'search'
+    (text-derived), 'recency_fallback' (a borrowed-CD seed with no disc match).
+    """
+    if not candidate or not candidate.evidence:
+        return None
+    try:
+        ev = json.loads(candidate.evidence)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return ev.get("match") if isinstance(ev, dict) else None
 
 
 async def _ensure_placeholder_metadata(job_id: str) -> None:

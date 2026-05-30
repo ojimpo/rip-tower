@@ -387,3 +387,68 @@ async def test_track_count_match_no_mismatch_flag(monkeypatch, async_session_mak
     result = await sanitizer.sanitize_candidates("job-tcok")
     issues = json.loads(result.issues or "[]")
     assert "track_count_mismatch" not in issues
+
+
+# ───────────────── Fix C: unanchored-identification guard ─────────────────
+
+
+def test_candidate_match_kind():
+    assert sanitizer._candidate_match_kind(
+        _cand(evidence=json.dumps({"match": "toc_submission"}))) == "toc_submission"
+    assert sanitizer._candidate_match_kind(_cand()) is None
+
+
+@pytest.mark.asyncio
+async def test_unanchored_identification_flagged(monkeypatch, async_session_maker):
+    """Best is a text_search echo of a recency-fallback seed, nothing disc-anchored."""
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-un", drive_id="d", disc_id="dx"))
+        for n in range(1, 12):  # 11 tracks — matches title count so only the anchor check fires
+            s.add(Track(job_id="job-un", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-un", source="musicbrainz", artist="菅田将暉",
+            album="LOVE", confidence=90,
+            track_titles=json.dumps([f"t{i}" for i in range(11)], ensure_ascii=False),
+            evidence=json.dumps({"match": "text_search"}, ensure_ascii=False),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-un", source="kashidashi", artist="菅田将暉",
+            album="LOVE", confidence=55, evidence=_recency_evidence(190),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-un")
+    issues = json.loads(result.issues or "[]")
+    assert "unanchored_identification" in issues
+    assert result.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_disc_anchored_match_not_flagged_unanchored(monkeypatch, async_session_maker):
+    """A disc-anchored (toc_submission) best that matches a borrowed CD is the GOOD
+    case — the borrowed disc correctly identified — and must NOT be flagged."""
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-anch", drive_id="d", disc_id="dx"))
+        for n in range(1, 12):
+            s.add(Track(job_id="job-anch", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-anch", source="musicbrainz", artist="菅田将暉",
+            album="LOVE", confidence=90,
+            track_titles=json.dumps([f"t{i}" for i in range(11)], ensure_ascii=False),
+            evidence=json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-anch", source="kashidashi", artist="菅田将暉",
+            album="LOVE", confidence=55, evidence=_recency_evidence(190),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-anch")
+    issues = json.loads(result.issues or "[]")
+    assert "unanchored_identification" not in issues
