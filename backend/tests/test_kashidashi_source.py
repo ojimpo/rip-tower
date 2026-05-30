@@ -247,3 +247,100 @@ async def test_fetch_active_borrowed_items_returns_empty_when_unconfigured(monke
     )
     out = await fetch_active_borrowed_items()
     assert out == []
+
+
+# ───────────────── Fix B: script-insensitive (MB-alias) matching ─────────────────
+
+
+def _candidate(**kw):
+    base = {"artist": None, "album": None, "evidence": None, "source_url": None}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_mb_release_id_from_evidence():
+    import json
+    c = _candidate(evidence=json.dumps({"mb_release": "abc-123"}))
+    assert kashidashi_mod._mb_release_id(c) == "abc-123"
+
+
+def test_mb_release_id_from_source_url():
+    c = _candidate(source_url="https://musicbrainz.org/release/def-456")
+    assert kashidashi_mod._mb_release_id(c) == "def-456"
+
+
+def test_mb_release_id_none():
+    assert kashidashi_mod._mb_release_id(_candidate()) is None
+
+
+def test_is_disc_anchored():
+    import json
+    assert kashidashi_mod._is_disc_anchored(
+        _candidate(evidence=json.dumps({"match": "toc_submission"}))) is True
+    assert kashidashi_mod._is_disc_anchored(
+        _candidate(evidence=json.dumps({"match": "text_search"}))) is False
+
+
+@pytest.mark.asyncio
+async def test_best_match_direct_same_script(monkeypatch):
+    """Same-script match needs no MB alias lookup."""
+    called = False
+
+    async def _should_not_call(_rid):
+        nonlocal called
+        called = True
+        return [], []
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.musicbrainz.fetch_release_artist_aliases",
+        _should_not_call,
+    )
+    items = [_item(id=5, artist="宮本浩次", title="ROMANCE")]
+    cand = _candidate(artist="宮本浩次", album="ROMANCE",
+                      evidence='{"match":"toc_submission","mb_release":"r"}')
+    item, art, alb = await kashidashi_mod.best_kashidashi_match(cand, items)
+    assert item is not None and art >= 0.6 and alb >= 0.6
+    assert called is False  # direct match short-circuits before any network call
+
+
+@pytest.mark.asyncio
+async def test_best_match_cross_script_via_alias(monkeypatch):
+    """Japanese borrowed record matches an English MB candidate through aliases.
+
+    This is bbx9jqrx: borrowed 'エイミー・ワインハウス / バック・トゥ・ブラック'
+    vs MB 'Amy Winehouse / Back to Black' — direct similarity is 0, but the MB
+    artist alias bridges them, and the disc-anchored TOC covers the album title.
+    """
+    async def _aliases(_rid):
+        return ["Amy Winehouse", "エイミー・ワインハウス"], []
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.musicbrainz.fetch_release_artist_aliases",
+        _aliases,
+    )
+    items = [_item(id=191, artist="エイミー・ワインハウス", title="バック・トゥ・ブラック")]
+    cand = _candidate(artist="Amy Winehouse", album="Back to Black",
+                      evidence='{"match":"toc_submission","mb_release":"r"}')
+    item, art, alb = await kashidashi_mod.best_kashidashi_match(cand, items)
+    assert item is not None and item["id"] == 191
+    assert art >= 0.6  # matched via katakana alias
+    assert alb >= 0.6  # disc-anchored relaxation covers the cross-script title
+
+
+@pytest.mark.asyncio
+async def test_best_match_cross_script_album_not_relaxed_when_unanchored(monkeypatch):
+    """Without a disc anchor, a cross-script album title must NOT be relaxed —
+    artist alone is not enough to claim the disc."""
+    async def _aliases(_rid):
+        return ["Amy Winehouse", "エイミー・ワインハウス"], []
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.musicbrainz.fetch_release_artist_aliases",
+        _aliases,
+    )
+    items = [_item(id=191, artist="エイミー・ワインハウス", title="バック・トゥ・ブラック")]
+    cand = _candidate(artist="Amy Winehouse", album="Back to Black",
+                      evidence='{"match":"text_search","mb_release":"r"}')
+    _item_res, art, alb = await kashidashi_mod.best_kashidashi_match(cand, items)
+    assert art >= 0.6      # artist still bridges via alias
+    assert alb < 0.6       # album stays unmatched → resolver won't boost

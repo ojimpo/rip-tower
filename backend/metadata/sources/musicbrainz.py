@@ -16,6 +16,69 @@ MB_BASE = "https://musicbrainz.org/ws/2"
 HEADERS = {"User-Agent": "RipTower/0.1.0 (https://github.com/kouki/rip-tower)"}
 RATE_LIMIT = 1.0  # 1 request per second
 
+# Cache of release_id -> (artist_aliases, release_aliases). Aliases are stable,
+# so one fetch per release per process is plenty.
+_ALIAS_CACHE: dict[str, tuple[list[str], list[str]]] = {}
+
+
+async def fetch_release_artist_aliases(
+    release_id: str,
+) -> tuple[list[str], list[str]]:
+    """Return (artist_aliases, release_aliases) for a MusicBrainz release.
+
+    Used by the kashidashi cross-check to match across scripts: a borrowed-CD
+    record written in Japanese ("エイミー・ワインハウス") won't string-match an
+    English MB candidate ("Amy Winehouse"), but MB stores the Japanese form as a
+    locale alias. Aliases include the canonical name itself. Returns ([], []) on
+    any failure so callers can fall back to plain text matching.
+    """
+    if not release_id:
+        return [], []
+    if release_id in _ALIAS_CACHE:
+        return _ALIAS_CACHE[release_id]
+
+    artist_aliases: list[str] = []
+    release_aliases: list[str] = []
+    try:
+        await asyncio.sleep(RATE_LIMIT)
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15) as client:
+            resp = await client.get(
+                f"{MB_BASE}/release/{release_id}",
+                params={"fmt": "json", "inc": "artist-credits+aliases"},
+            )
+            artist_ids: list[str] = []
+            if resp.status_code == 200:
+                data = resp.json()
+                release_aliases = [
+                    a["name"] for a in data.get("aliases", []) if a.get("name")
+                ]
+                for credit in data.get("artist-credit", []):
+                    artist = credit.get("artist", {})
+                    if artist.get("name"):
+                        artist_aliases.append(artist["name"])
+                    if artist.get("id"):
+                        artist_ids.append(artist["id"])
+
+            for artist_id in artist_ids[:2]:  # joint credits are rare; cap fetches
+                await asyncio.sleep(RATE_LIMIT)
+                ar = await client.get(
+                    f"{MB_BASE}/artist/{artist_id}",
+                    params={"fmt": "json", "inc": "aliases"},
+                )
+                if ar.status_code == 200:
+                    adata = ar.json()
+                    artist_aliases.extend(
+                        a["name"] for a in adata.get("aliases", []) if a.get("name")
+                    )
+    except Exception:
+        logger.debug("MB alias fetch failed for release %s", release_id, exc_info=True)
+
+    # De-dupe while preserving order.
+    artist_aliases = list(dict.fromkeys(artist_aliases))
+    release_aliases = list(dict.fromkeys(release_aliases))
+    _ALIAS_CACHE[release_id] = (artist_aliases, release_aliases)
+    return artist_aliases, release_aliases
+
 # CD-family media we'll count as discs of a release. The exact-match
 # `format == "CD"` filter we used to apply silently dropped SHM-CD/HQCD/etc.
 # releases — and the fallback (count all media) then pulled DVD-Video bonus
