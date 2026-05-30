@@ -227,6 +227,7 @@ async def list_jobs(
             "elapsed_seconds": elapsed_seconds,
             "created_at": _utc_iso(job.created_at),
             "updated_at": _utc_iso(job.updated_at),
+            "completed_at": _utc_iso(job.completed_at),
             "error_message": job.error_message,
             "artwork_url": None,  # TODO: add artwork thumbnail
             "disc_number": meta.disc_number if meta else None,

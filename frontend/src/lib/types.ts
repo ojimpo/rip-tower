@@ -149,6 +149,7 @@ export interface JobSummary {
   elapsed_seconds: number | null;
   created_at: string;
   updated_at: string;
+  completed_at: string | null;
   error_message: string | null;
   artwork_url: string | null;
   disc_number: number | null;

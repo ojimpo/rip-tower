@@ -305,3 +305,25 @@ class TestArtworkDelete:
         # Same artwork id but wrong job
         resp = await client.delete(f"/api/jobs/art-job-5/artworks/{a.id}")
         assert resp.status_code == 404
+
+
+# ───────────────── Fix D: Recent list sorts by confirmation time ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_includes_completed_at(client, db_session):
+    """The jobs list must expose completed_at so the dashboard 'Recent' section
+    can order by confirmation time rather than creation time."""
+    from datetime import datetime
+
+    db_session.add(
+        Job(id="job-ca", status="complete", source_type="owned",
+            completed_at=datetime(2026, 5, 29, 12, 0, 0))
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/jobs")
+    assert resp.status_code == 200
+    summary = resp.json()["jobs"][0]
+    assert "completed_at" in summary
+    assert summary["completed_at"] is not None
