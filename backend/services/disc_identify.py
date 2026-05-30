@@ -52,28 +52,29 @@ async def identify(dev_path: str) -> DiscInfo:
 
     artist = None
     album = None
+    release_id = None
 
     if offsets and leadout_seconds:
         # Query MusicBrainz and CDDB in parallel
         mb_task = asyncio.create_task(_mb_toc_lookup(disc_id, track_count, offsets, leadout_seconds))
         cddb_task = asyncio.create_task(_cddb_lookup(disc_id, track_count, offsets, leadout_seconds))
-        results = await asyncio.gather(mb_task, cddb_task, return_exceptions=True)
+        mb_result, cddb_result = await asyncio.gather(
+            mb_task, cddb_task, return_exceptions=True
+        )
 
-        # Pick first successful result (MusicBrainz preferred)
-        for result in results:
-            if isinstance(result, Exception):
-                continue
-            if result and result[0]:
-                artist, album = result
-                break
+        # MusicBrainz preferred; only it yields a release id (for alias matching).
+        if not isinstance(mb_result, Exception) and mb_result and mb_result[0]:
+            artist, album, release_id = mb_result
+        elif not isinstance(cddb_result, Exception) and cddb_result and cddb_result[0]:
+            artist, album = cddb_result
 
-    artist, album = await _reconcile_with_borrowed(artist, album)
+    artist, album = await _reconcile_with_borrowed(artist, album, release_id)
 
     return DiscInfo(disc_id=disc_id, track_count=track_count, artist=artist, album=album)
 
 
 async def _reconcile_with_borrowed(
-    artist: str | None, album: str | None
+    artist: str | None, album: str | None, release_id: str | None = None
 ) -> tuple[str | None, str | None]:
     """Override misleading MB/CDDB output when the user is borrowing CDs.
 
@@ -95,10 +96,11 @@ async def _reconcile_with_borrowed(
 
     Returns (artist, album), either unchanged or replaced.
     """
-    from backend.metadata.normalize import similarity
+    from types import SimpleNamespace
+
     from backend.metadata.sources.kashidashi import (
+        best_kashidashi_match,
         fetch_active_borrowed_items,
-        kashidashi_match_score,
     )
 
     try:
@@ -110,9 +112,20 @@ async def _reconcile_with_borrowed(
         return artist, album
 
     if artist or album:
-        item, art_sim, alb_sim = kashidashi_match_score(
-            artist or "", album or "", borrowed
+        # Reuse the resolver's script-insensitive matcher. With a release id it
+        # bridges scripts via MusicBrainz aliases (so an English MB result still
+        # matches a katakana borrowed record); without one it degrades to a
+        # plain text match. A `toc_submission` shim marks the album as
+        # disc-proven, so a confirmed artist alias alone is enough.
+        shim = SimpleNamespace(
+            artist=artist or "",
+            album=album or "",
+            source_url=(
+                f"https://musicbrainz.org/release/{release_id}" if release_id else None
+            ),
+            evidence='{"match": "toc_submission"}' if release_id else None,
         )
+        item, art_sim, alb_sim = await best_kashidashi_match(shim, borrowed)
         if item is not None and (
             art_sim >= _BORROWED_MATCH_THRESHOLD
             or alb_sim >= _BORROWED_MATCH_THRESHOLD
@@ -140,8 +153,12 @@ async def _reconcile_with_borrowed(
 
 async def _mb_toc_lookup(
     disc_id: str, track_count: int, offsets: list[int], leadout_seconds: int
-) -> tuple[str | None, str | None]:
-    """Quick MusicBrainz TOC lookup. Returns (artist, album)."""
+) -> tuple[str | None, str | None, str | None]:
+    """Quick MusicBrainz TOC lookup. Returns (artist, album, release_id).
+
+    The release id lets the borrowed-CD reconciliation match across scripts via
+    MusicBrainz aliases (a Japanese borrowed record vs an English MB result).
+    """
     leadout_sectors = leadout_seconds * 75
     toc = f"1 {track_count} {leadout_sectors} {' '.join(str(o) for o in offsets)}"
     try:
@@ -161,10 +178,10 @@ async def _mb_toc_lookup(
                     ac = rel.get("artist-credit", [])
                     artist = ac[0].get("name", "") if ac and isinstance(ac[0], dict) else None
                     album = rel.get("title")
-                    return artist, album
+                    return artist, album, rel.get("id")
     except Exception:
         logger.debug("MusicBrainz TOC lookup failed for disc %s", disc_id)
-    return None, None
+    return None, None, None
 
 
 async def _cddb_lookup(

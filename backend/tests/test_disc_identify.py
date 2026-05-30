@@ -140,3 +140,47 @@ async def test_prefers_metadata_fields_over_plain_when_present(monkeypatch):
     artist, album = await _reconcile_with_borrowed(None, None)
     assert artist == "Cocco"
     assert album == "ザ・ベスト盤"
+
+
+@pytest.mark.asyncio
+async def test_keeps_mb_result_matching_borrowed_cd_across_scripts(monkeypatch):
+    """English MB result matches a katakana borrowed record via MusicBrainz
+    aliases, so the name is kept instead of suppressed as ambiguous."""
+    async def _items():
+        return [
+            _borrowed(id=1, artist="エイミー・ワインハウス", title="バック・トゥ・ブラック"),
+            _borrowed(id=2, artist="加古隆", title="白い巨塔"),
+        ]
+
+    async def _aliases(_release_id):
+        return ["Amy Winehouse", "エイミー・ワインハウス"], []
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items", _items
+    )
+    monkeypatch.setattr(
+        "backend.metadata.sources.musicbrainz.fetch_release_artist_aliases", _aliases
+    )
+    artist, album = await _reconcile_with_borrowed(
+        "Amy Winehouse", "Back to Black", release_id="r-123"
+    )
+    assert artist == "Amy Winehouse"
+    assert album == "Back to Black"
+
+
+@pytest.mark.asyncio
+async def test_cross_script_without_release_id_still_suppressed(monkeypatch):
+    """Sanity: without a release id (e.g. a CDDB result) there are no aliases to
+    bridge scripts, so an ambiguous pool still suppresses — documented fallback."""
+    async def _items():
+        return [
+            _borrowed(id=1, artist="エイミー・ワインハウス", title="バック・トゥ・ブラック"),
+            _borrowed(id=2, artist="加古隆", title="白い巨塔"),
+        ]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items", _items
+    )
+    artist, album = await _reconcile_with_borrowed("Amy Winehouse", "Back to Black")
+    assert artist is None
+    assert album is None
