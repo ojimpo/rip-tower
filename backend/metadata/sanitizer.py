@@ -177,6 +177,15 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         if len(albums_seen) > 1:
             issues.append("album_contradiction")
 
+    # Track-count hard gate: if the chosen release lists a different number of
+    # tracks than the disc actually has, it cannot be this disc. This catches
+    # text-search candidates seeded by a borrowed-CD title (recency fallback)
+    # that "confirm" an album with the wrong track count — e.g. an 18-track disc
+    # mislabelled as an 11-track album. Force review rather than auto-approving.
+    best_expected = candidate_expected_track_count(best)
+    if expected_track_count and best_expected and best_expected != expected_track_count:
+        issues.append("track_count_mismatch")
+
     # Kashidashi cross-check: every candidate that maps to a currently-borrowed
     # CD carries a `kashidashi_id` (kashidashi-source) or `kashidashi_confirmed`
     # (resolver boost). When best disagrees with the library on which item the
@@ -377,6 +386,34 @@ async def _get_track_count(job_id: str) -> int:
             select(func.count(Track.id)).where(Track.job_id == job_id)
         )
         return result.scalar() or 0
+
+
+def candidate_expected_track_count(candidate: MetadataCandidate) -> int | None:
+    """How many tracks the candidate's release is expected to have, or None.
+
+    Used as a hard cross-check against the physical disc's track count: a
+    candidate whose release has a different number of tracks than the disc the
+    user actually ripped cannot be that disc, no matter how its text matches.
+    Prefer the explicit track listing; fall back to a count recorded in
+    evidence (e.g. MusicBrainz medium track-count).
+    """
+    if candidate.track_titles:
+        try:
+            titles = json.loads(candidate.track_titles)
+            if isinstance(titles, list) and titles:
+                return len(titles)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if candidate.evidence:
+        try:
+            ev = json.loads(candidate.evidence)
+            for key in ("track_count", "mb_track_count", "disc_track_count"):
+                val = ev.get(key)
+                if isinstance(val, int) and val > 0:
+                    return val
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return None
 
 
 # Source preference order for track titles when scores tie. iTunes/MB/Discogs

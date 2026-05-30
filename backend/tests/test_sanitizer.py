@@ -311,3 +311,79 @@ async def test_kashidashi_no_flag_when_best_and_others_share_item(
     issues = json.loads(result.issues or "[]")
     assert "kashidashi_mismatch" not in issues
     assert "kashidashi_ambiguous" not in issues
+
+
+# ───────────────── Fix A: track-count hard gate ─────────────────
+
+from types import SimpleNamespace  # noqa: E402
+
+
+def _cand(**kw):
+    base = {"track_titles": None, "evidence": None, "source_url": None,
+            "artist": None, "album": None}
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_candidate_expected_track_count_from_titles():
+    c = _cand(track_titles=json.dumps(["a", "b", "c"], ensure_ascii=False))
+    assert sanitizer.candidate_expected_track_count(c) == 3
+
+
+def test_candidate_expected_track_count_from_evidence():
+    c = _cand(evidence=json.dumps({"track_count": 11}))
+    assert sanitizer.candidate_expected_track_count(c) == 11
+
+
+def test_candidate_expected_track_count_unknown():
+    assert sanitizer.candidate_expected_track_count(_cand()) is None
+
+
+@pytest.mark.asyncio
+async def test_track_count_mismatch_flagged(monkeypatch, async_session_maker):
+    """18-track disc but the chosen release lists 11 tracks → mismatch + review.
+
+    This is the o8maxpvg failure: a recency-fallback 'LOVE' (11tr) text-matched
+    onto an 18-track disc must not slip through as confirmed metadata.
+    """
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-tc", drive_id="d", disc_id="dx"))
+        for n in range(1, 19):  # 18 ripped tracks
+            s.add(Track(job_id="job-tc", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-tc", source="musicbrainz", artist="菅田将暉",
+            album="LOVE", confidence=90,
+            track_titles=json.dumps([f"t{i}" for i in range(11)], ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-tc")
+    issues = json.loads(result.issues or "[]")
+    assert "track_count_mismatch" in issues
+    assert result.needs_review is True
+
+
+@pytest.mark.asyncio
+async def test_track_count_match_no_mismatch_flag(monkeypatch, async_session_maker):
+    """When the release track count equals the disc's, no mismatch is flagged."""
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-tcok", drive_id="d", disc_id="dx"))
+        for n in range(1, 12):  # 11 ripped tracks
+            s.add(Track(job_id="job-tcok", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-tcok", source="musicbrainz", artist="菅田将暉",
+            album="LOVE", confidence=90,
+            track_titles=json.dumps([f"t{i}" for i in range(11)], ensure_ascii=False),
+            evidence=json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-tcok")
+    issues = json.loads(result.issues or "[]")
+    assert "track_count_mismatch" not in issues
