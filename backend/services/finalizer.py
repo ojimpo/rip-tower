@@ -377,9 +377,24 @@ def move_to_trash(files: list[Path], trash_dir: Path, label: str = "") -> int:
 
 
 async def _embed_artwork(flac_path: Path, artwork_path: Path) -> None:
-    """Embed artwork into a FLAC file."""
+    """Embed artwork into a FLAC file.
+
+    Existing PICTURE blocks are removed first. metaflac --import-picture-from
+    only appends, so re-applying after an artwork change would otherwise stack
+    the new cover on top of the old one — and players that show the first front
+    cover keep displaying the stale (often mismatched) art.
+    """
     if not artwork_path.exists():
         return
+    remove = await asyncio.create_subprocess_exec(
+        "metaflac",
+        "--remove",
+        "--block-type=PICTURE",
+        str(flac_path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await remove.communicate()
     proc = await asyncio.create_subprocess_exec(
         "metaflac",
         "--import-picture-from",
