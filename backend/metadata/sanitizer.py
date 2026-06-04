@@ -27,6 +27,10 @@ from backend.models import JobMetadata, MetadataCandidate, Track
 
 logger = logging.getLogger(__name__)
 
+# Below this artist similarity, a disc-anchored candidate and the borrowed-CD
+# guess are considered to name *different* artists (a TOC-collision conflict).
+_ARTIST_CONFLICT_SIM = 0.6
+
 
 async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     """Read all candidates for a job, sanitize, rank, select best, and save JobMetadata.
@@ -224,6 +228,26 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         # *different* borrowed CD. Pool-of-multiple-borrows is inherently
         # ambiguous from disc-ID alone — make the user confirm.
         issues.append("kashidashi_ambiguous")
+
+    # Disc-TOC vs borrowed-CD conflict: when the leading candidate is an
+    # *unproven* borrowed-CD guess (recency_fallback / fuzzy — not a disc-ID/TOC
+    # read) and a disc-anchored candidate names a clearly different artist, the
+    # physical disc's TOC disagrees with the library on what this is. TOC
+    # collisions mean we can't resolve it from disc-ID alone, so force review
+    # rather than auto-approving the borrowed guess after the resolver demoted
+    # the colliding disc-anchored candidate (Todoist 6gp5wg5vFMRmvVmF).
+    if (
+        best_item is not None
+        and _candidate_match_kind(best) != "exact_discid"
+        and "kashidashi_ambiguous" not in issues
+    ):
+        for c in candidates[1:]:
+            if (
+                _candidate_match_kind(c) in ("toc_submission", "exact_discid")
+                and similarity(best.artist or "", c.artist or "") < _ARTIST_CONFLICT_SIM
+            ):
+                issues.append("kashidashi_ambiguous")
+                break
 
     # Determine review need
     confidence = best.confidence or 0

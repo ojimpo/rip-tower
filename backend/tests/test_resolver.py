@@ -506,3 +506,95 @@ async def test_boost_excludes_kashidashi_source_candidates(
         c = list(result.scalars())[0]
 
     assert c.confidence == 70  # untouched
+
+
+@pytest.mark.asyncio
+async def test_boost_penalizes_conflicting_disc_anchored_candidate(
+    monkeypatch, async_session_maker,
+):
+    """TOC collision: a disc-anchored MB candidate (Various Artists comp) matches
+    no borrowed CD, while the user is holding JUJU. The colliding candidate must
+    be knocked below auto-approve so review leads with the borrowed CD, not the
+    wrong release confirmed at high confidence (Todoist 6gp5wg5vFMRmvVmF)."""
+    import json as _json
+
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return [_kashidashi_item(id=55, artist="JUJU", title="スナックJUJU")]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-coll", drive_id="d", disc_id="e60dda0f"))
+        # Disc-anchored MB candidate from a TOC collision — wrong album.
+        s.add(MetadataCandidate(
+            job_id="job-coll", source="musicbrainz",
+            artist="Various Artists", album="Hit Summer Now", confidence=90,
+            evidence=_json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        # The borrowed CD the user actually holds, surfaced by kashidashi.
+        s.add(MetadataCandidate(
+            job_id="job-coll", source="kashidashi",
+            artist="JUJU", album="スナックJUJU", confidence=70,
+            evidence=_json.dumps({
+                "kashidashi_id": 55, "match": "recency_fallback",
+            }, ensure_ascii=False),
+        ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-coll")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        result = await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-coll")
+        )
+        by_source = {c.source: c for c in result.scalars()}
+
+    assert by_source["musicbrainz"].confidence == resolver._KASHIDASHI_CONFLICT_FLOOR
+    assert "kashidashi_conflict" in (by_source["musicbrainz"].evidence or "")
+    assert by_source["kashidashi"].confidence == 70  # borrowed CD untouched
+    # Borrowed CD now outranks the colliding disc-anchored candidate.
+    assert by_source["kashidashi"].confidence > by_source["musicbrainz"].confidence
+
+
+@pytest.mark.asyncio
+async def test_boost_does_not_penalize_without_borrowed_candidate(
+    monkeypatch, async_session_maker,
+):
+    """A disc-anchored candidate that matches no borrowed pool is left alone when
+    no kashidashi candidate was surfaced for this disc (the disc isn't a borrow)."""
+    import json as _json
+
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async def _items():
+        return [_kashidashi_item(id=99, artist="Someone Else", title="Other")]
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.kashidashi.fetch_active_borrowed_items",
+        _items,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-own", drive_id="d", disc_id="dx"))
+        s.add(MetadataCandidate(
+            job_id="job-own", source="musicbrainz",
+            artist="My Own Band", album="My Own Album", confidence=90,
+            evidence=_json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        await s.commit()
+
+    await resolver._boost_kashidashi_matches("job-own")
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        c = (await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-own")
+        )).scalars().first()
+
+    assert c.confidence == 90  # no borrowed candidate surfaced → untouched

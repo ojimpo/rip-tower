@@ -313,6 +313,42 @@ async def test_kashidashi_no_flag_when_best_and_others_share_item(
     assert "kashidashi_ambiguous" not in issues
 
 
+@pytest.mark.asyncio
+async def test_unproven_library_best_conflicting_anchor_forces_review(
+    monkeypatch, async_session_maker,
+):
+    """After the resolver demotes a colliding disc-anchored candidate, an unproven
+    borrowed-CD guess can rank best. If a disc-anchored candidate still names a
+    different artist, the disc's TOC disagrees with the library — force review
+    rather than auto-approving the recency guess (Todoist 6gp5wg5vFMRmvVmF)."""
+    from backend.models import Job, MetadataCandidate, Track
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-conf", drive_id="d", disc_id="e60dda0f"))
+        for n in range(1, 4):
+            s.add(Track(job_id="job-conf", track_num=n))
+        # Borrowed-CD recency guess, now highest after the resolver penalty.
+        s.add(MetadataCandidate(
+            job_id="job-conf", source="kashidashi",
+            artist="JUJU", album="スナックJUJU", confidence=70,
+            evidence=_recency_evidence(55),
+        ))
+        # Demoted disc-anchored TOC-collision candidate, different artist.
+        s.add(MetadataCandidate(
+            job_id="job-conf", source="musicbrainz",
+            artist="Various Artists", album="Hit Summer Now", confidence=40,
+            evidence=json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-conf")
+    issues = json.loads(result.issues or "[]")
+    assert "kashidashi_ambiguous" in issues
+    assert result.needs_review is True
+
+
 # ───────────────── Fix A: track-count hard gate ─────────────────
 
 from types import SimpleNamespace  # noqa: E402

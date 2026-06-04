@@ -253,6 +253,16 @@ async def _match_kashidashi(job_id: str, identity) -> None:
 _KASHIDASHI_BOOST = 25
 _KASHIDASHI_SIM_THRESHOLD = 0.6
 
+# Confidence a disc-anchored candidate is knocked down to when it conflicts with
+# a borrowed CD. A CDDB/TOC disc-ID collision lets MusicBrainz's disc lookup
+# "confirm" a release the user isn't holding (JUJU's disc mis-confirmed as a
+# Various-Artists comp at confidence ~90 — Todoist 6gp5wg5vFMRmvVmF). When a
+# borrowed CD is surfaced for this disc but a disc-anchored candidate matches
+# *none* of the borrowed pool, drop it below the auto-approve line (50) and
+# below a typical recency-fallback borrowed candidate (50–80) so review leads
+# with the CD the user physically holds rather than the colliding release.
+_KASHIDASHI_CONFLICT_FLOOR = 40
+
 
 async def _boost_kashidashi_matches(job_id: str) -> None:
     """Boost candidates whose artist+album matches a currently-borrowed CD.
@@ -270,6 +280,7 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
 
     from backend.metadata.sanitizer import candidate_expected_track_count
     from backend.metadata.sources.kashidashi import (
+        _is_disc_anchored,
         best_kashidashi_match,
         fetch_active_borrowed_items,
     )
@@ -296,6 +307,7 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
         )
         candidates = list(result.scalars().all())
 
+        boosted_ids: set[int] = set()
         for c in candidates:
             if c.source == "kashidashi":
                 continue
@@ -314,6 +326,7 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
                 continue
             if art_sim < _KASHIDASHI_SIM_THRESHOLD or alb_sim < _KASHIDASHI_SIM_THRESHOLD:
                 continue
+            boosted_ids.add(c.id)
             old_conf = c.confidence or 0
             c.confidence = min(old_conf + _KASHIDASHI_BOOST, 100)
             evidence: dict = {}
@@ -333,6 +346,40 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
                 "Boosted candidate id=%s (%s/%s) by +%d for kashidashi item %s",
                 c.id, c.source, c.artist, _KASHIDASHI_BOOST, item.get("id"),
             )
+
+        # Penalize disc-anchored candidates that conflict with a borrowed CD.
+        # Only engages when a borrowed CD was actually surfaced for this disc
+        # (a kashidashi-source candidate exists): a disc-anchored candidate that
+        # matched *no* borrowed item is then likely a TOC collision, so it must
+        # not present itself as the high-confidence confirmed answer over the CD
+        # the user is holding.
+        borrowed_surfaced = any(c.source == "kashidashi" for c in candidates)
+        if borrowed_surfaced:
+            for c in candidates:
+                if c.source == "kashidashi" or c.id in boosted_ids:
+                    continue
+                if not _is_disc_anchored(c):
+                    continue
+                old_conf = c.confidence or 0
+                if old_conf <= _KASHIDASHI_CONFLICT_FLOOR:
+                    continue
+                c.confidence = _KASHIDASHI_CONFLICT_FLOOR
+                evidence = {}
+                if c.evidence:
+                    try:
+                        evidence = json.loads(c.evidence)
+                    except (json.JSONDecodeError, TypeError):
+                        evidence = {}
+                evidence["kashidashi_conflict"] = {
+                    "previous_confidence": old_conf,
+                    "floor": _KASHIDASHI_CONFLICT_FLOOR,
+                }
+                c.evidence = json.dumps(evidence, ensure_ascii=False)
+                logger.info(
+                    "Penalized disc-anchored candidate id=%s (%s/%s) %d→%d: "
+                    "conflicts with borrowed CD",
+                    c.id, c.source, c.artist, old_conf, _KASHIDASHI_CONFLICT_FLOOR,
+                )
 
         await session.commit()
 
