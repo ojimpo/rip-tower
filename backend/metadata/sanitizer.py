@@ -117,7 +117,12 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
 
         if raw_titles and compilation_count > len(raw_titles) / 2:
             is_compilation = True
-            artist = normalize_various_artists(artist) if artist else "Various Artists"
+            # A multi-artist disc's album artist is "Various Artists" — even when
+            # the source credited the release to one contributing performer.
+            # normalize_various_artists() only rewrites literal VA spellings, so a
+            # real name like "平沢進" slipped through and became the album artist
+            # of a compilation (Todoist 6gp628r73WQ8576F).
+            artist = "Various Artists"
 
     # Flag annotation-heavy track titles (CDDB tie-up notes etc.) so the user
     # is prompted to review even when confidence is otherwise high.

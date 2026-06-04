@@ -3,11 +3,12 @@
 import asyncio
 import json
 import logging
+from collections import Counter
 from typing import Any
 
 import httpx
 
-from backend.metadata.normalize import similarity
+from backend.metadata.normalize import norm, normalize_various_artists, similarity
 from backend.metadata.sources.base import MetadataSource
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,72 @@ _CD_FORMATS = frozenset({
     "Hybrid SACD",  # has a CD layer; ripable
     "XRCD",
 })
+
+
+def _join_artist_credit(ac: Any) -> str:
+    """Join a MusicBrainz artist-credit array into a display string.
+
+    Honours joinphrase so collaborations come back as "A feat. B". Accepts both
+    the release/recording shape ({"name": ..., "joinphrase": ...}) and bare
+    strings, returning "" when nothing usable is present.
+    """
+    if not isinstance(ac, list):
+        return ""
+    parts: list[str] = []
+    for cr in ac:
+        if isinstance(cr, dict):
+            name = cr.get("name") or (cr.get("artist") or {}).get("name") or ""
+            parts.append(name)
+            parts.append(cr.get("joinphrase", "") or "")
+        else:
+            parts.append(str(cr))
+    return "".join(parts).strip()
+
+
+def _track_artist(track: dict) -> str:
+    """Per-track performer from a MusicBrainz track (track-level credit first)."""
+    return (
+        _join_artist_credit(track.get("artist-credit"))
+        or _join_artist_credit((track.get("recording") or {}).get("artist-credit"))
+    )
+
+
+def _track_entries(tracks: list[dict], release_artist: str) -> list[str]:
+    """Build track_titles, prefixing "artist / title" when the disc is multi-artist.
+
+    MusicBrainz credits every track to its own artist, but rip-tower previously
+    kept only the release-level artist-credit — so a Various-Artists compilation
+    came out tagged to a single contributing artist, and Plex then showed that
+    one performer as the album artist instead of "Various Artists" (Todoist
+    6gp628r73WQ8576F: "Various のアルバムアーティストが平沢進になる").
+
+    When the disc is genuinely multi-artist (the release is credited to Various,
+    or no single performer accounts for ≥60% of the tracks) we emit the
+    "artist / title" form the sanitizer already understands as a compilation —
+    it splits per-track artists out and forces ALBUMARTIST=Various Artists. For a
+    normal single-artist album (one dominant performer) we return plain titles so
+    a lone guest feature doesn't flip the whole album to a compilation.
+    """
+    titles: list[str] = []
+    per_artist: list[str] = []
+    for t in tracks:
+        rec = t.get("recording") or {}
+        titles.append(rec.get("title") or t.get("title", ""))
+        per_artist.append(_track_artist(t))
+
+    counts = Counter(norm(a) for a in per_artist if a)
+    total_credited = sum(counts.values())
+    dominant_share = counts.most_common(1)[0][1] / total_credited if total_credited else 0.0
+    release_is_va = normalize_various_artists(release_artist or "") == "Various Artists"
+
+    is_compilation = release_is_va or (len(counts) > 1 and dominant_share < 0.6)
+    if not is_compilation:
+        return titles
+
+    out: list[str] = []
+    for title, ta in zip(titles, per_artist):
+        out.append(f"{ta} / {title}" if ta else title)
+    return out
 
 
 def _is_cd_medium(medium: dict) -> bool:
@@ -262,10 +329,7 @@ class MusicBrainzSource(MetadataSource):
                         continue
                     disc_number = chosen.get("position", 1)
 
-                    tracks = []
-                    for track in chosen.get("tracks", []):
-                        rec = track.get("recording", {})
-                        tracks.append(rec.get("title", track.get("title", "")))
+                    tracks = _track_entries(chosen.get("tracks", []), artist)
 
                     candidates.append({
                         "artist": artist,
@@ -381,7 +445,7 @@ class MusicBrainzSource(MetadataSource):
 
                     tracks, disc_number, total_discs = await self._fetch_tracks(
                         client, r.get("id", ""), target_disc, track_count,
-                        total_seconds,
+                        total_seconds, r_artist,
                     )
                     if tracks and track_count and len(tracks) == track_count:
                         conf += 5
@@ -430,6 +494,7 @@ class MusicBrainzSource(MetadataSource):
         target_disc: int,
         track_count: int,
         total_seconds: int = 0,
+        release_artist: str = "",
     ) -> tuple[list[str], int, int]:
         """Fetch track listing for a release.
 
@@ -444,7 +509,7 @@ class MusicBrainzSource(MetadataSource):
         try:
             resp = await client.get(
                 f"{MB_BASE}/release/{release_id}",
-                params={"fmt": "json", "inc": "recordings+media"},
+                params={"fmt": "json", "inc": "recordings+artist-credits+media"},
             )
             if resp.status_code != 200:
                 return [], 1, 1
@@ -464,9 +529,6 @@ class MusicBrainzSource(MetadataSource):
         if chosen is None:
             return [], 1, total_discs
 
-        tracks = []
-        for t in chosen.get("tracks", []):
-            rec = t.get("recording", {})
-            tracks.append(rec.get("title", t.get("title", "")))
+        tracks = _track_entries(chosen.get("tracks", []), release_artist)
 
         return tracks, chosen.get("position", 1), total_discs

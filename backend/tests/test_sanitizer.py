@@ -454,6 +454,45 @@ async def test_disc_anchored_match_not_flagged_unanchored(monkeypatch, async_ses
     assert "unanchored_identification" not in issues
 
 
+# ───────────────── compilation detection (Various Artists album artist) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_va_track_artists_yield_compilation(monkeypatch, async_session_maker):
+    """MusicBrainz now emits "artist / title" per track for Various-Artists discs;
+    the sanitizer must flag is_compilation and normalize the album artist to
+    "Various Artists" so it isn't tagged to a single performer (Todoist
+    6gp628r73WQ8576F)."""
+    from backend.models import Job, JobMetadata, MetadataCandidate, Track
+
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-va", drive_id="d", disc_id="dx"))
+        for n in range(1, 4):
+            s.add(Track(job_id="job-va", track_num=n))
+        s.add(MetadataCandidate(
+            job_id="job-va", source="musicbrainz",
+            artist="平沢進", album="スナックJUJU", confidence=90,
+            track_titles=json.dumps(
+                ["平沢進 / T1", "JUJU / T2", "椎名林檎 / T3"], ensure_ascii=False),
+            evidence=json.dumps({"match": "toc_submission"}, ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-va")
+    assert result.is_compilation is True
+    assert result.artist == "Various Artists"
+
+    async with async_session_maker() as s:
+        from sqlalchemy import select
+        tracks = (await s.execute(
+            select(Track).where(Track.job_id == "job-va").order_by(Track.track_num)
+        )).scalars().all()
+    assert [t.artist for t in tracks] == ["平沢進", "JUJU", "椎名林檎"]
+    assert [t.title for t in tracks] == ["T1", "T2", "T3"]
+
+
 # ───────────────── genre selection (no scavenging from mis-matches) ─────────────────
 
 

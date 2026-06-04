@@ -356,6 +356,103 @@ async def test_mb_disc_id_excludes_dvd_video_from_total_discs(monkeypatch):
     )
 
 
+def test_track_entries_va_release_prefixes_artists():
+    """A release credited to Various Artists emits "artist / title" per track."""
+    from backend.metadata.sources.musicbrainz import _track_entries
+
+    tracks = [
+        {"recording": {"title": "Song A"}, "artist-credit": [{"name": "平沢進"}]},
+        {"recording": {"title": "Song B"}, "artist-credit": [{"name": "Other Artist"}]},
+    ]
+    assert _track_entries(tracks, "Various Artists") == [
+        "平沢進 / Song A",
+        "Other Artist / Song B",
+    ]
+
+
+def test_track_entries_multi_artist_without_dominant_is_compilation():
+    """No single performer reaches 60% → treat as compilation even if release
+    isn't explicitly credited to Various."""
+    from backend.metadata.sources.musicbrainz import _track_entries
+
+    tracks = [
+        {"recording": {"title": "T1"}, "artist-credit": [{"name": "A"}]},
+        {"recording": {"title": "T2"}, "artist-credit": [{"name": "B"}]},
+        {"recording": {"title": "T3"}, "artist-credit": [{"name": "C"}]},
+    ]
+    assert _track_entries(tracks, "Some Comp Host") == ["A / T1", "B / T2", "C / T3"]
+
+
+def test_track_entries_single_artist_album_plain():
+    """A normal single-artist album returns plain titles (no compilation flip)."""
+    from backend.metadata.sources.musicbrainz import _track_entries
+
+    tracks = [
+        {"recording": {"title": "T1"}, "artist-credit": [{"name": "平沢進"}]},
+        {"recording": {"title": "T2"}, "artist-credit": [{"name": "平沢進"}]},
+    ]
+    assert _track_entries(tracks, "平沢進") == ["T1", "T2"]
+
+
+def test_track_entries_lone_guest_does_not_flip_album():
+    """One guest feature on an otherwise single-artist album stays a plain album."""
+    from backend.metadata.sources.musicbrainz import _track_entries
+
+    tracks = [{"recording": {"title": f"T{i}"}, "artist-credit": [{"name": "平沢進"}]}
+              for i in range(9)]
+    tracks.append({"recording": {"title": "T9"}, "artist-credit": [{"name": "Guest"}]})
+    entries = _track_entries(tracks, "平沢進")
+    assert entries == [f"T{i}" for i in range(9)] + ["T9"]
+
+
+def test_track_entries_joins_collaboration_with_joinphrase():
+    from backend.metadata.sources.musicbrainz import _join_artist_credit
+
+    ac = [{"name": "A", "joinphrase": " feat. "}, {"name": "B", "joinphrase": ""}]
+    assert _join_artist_credit(ac) == "A feat. B"
+
+
+@pytest.mark.asyncio
+async def test_mb_disc_id_va_compilation_captures_track_artists(monkeypatch):
+    """A Various-Artists disc must come back with per-track artists embedded as
+    "artist / title" so the sanitizer tags ALBUMARTIST=Various Artists rather
+    than the first contributing performer (Todoist 6gp628r73WQ8576F)."""
+    from backend.metadata.sources import musicbrainz as mb_mod
+
+    def toc_responder(url, params):
+        return _Resp(200, {"releases": [{
+            "id": "rel-va",
+            "title": "スナックJUJU",
+            "artist-credit": [{"name": "Various Artists"}],
+            "date": "2019",
+            "media": [{
+                "format": "CD",
+                "position": 1,
+                "track-count": 3,
+                "tracks": [
+                    {"recording": {"title": "T1"}, "artist-credit": [{"name": "平沢進"}]},
+                    {"recording": {"title": "T2"}, "artist-credit": [{"name": "JUJU"}]},
+                    {"recording": {"title": "T3"}, "artist-credit": [{"name": "椎名林檎"}]},
+                ],
+            }],
+        }]})
+
+    _patch_httpx(monkeypatch, mb_mod, {
+        "https://musicbrainz.org/ws/2/discid/-": toc_responder,
+    })
+
+    src = MusicBrainzSource(mode="disc_id")
+    identity = SimpleNamespace(
+        disc_id="e60dda0f", track_count=3,
+        offsets=[150, 18000, 36000], leadout=2400, total_seconds=2400,
+    )
+    candidates = await src.search(identity, hints=None)
+
+    assert candidates
+    titles = json.loads(candidates[0]["track_titles"])
+    assert titles == ["平沢進 / T1", "JUJU / T2", "椎名林檎 / T3"]
+
+
 @pytest.mark.asyncio
 async def test_mb_disc_id_mode_no_offsets_returns_empty(monkeypatch):
     """Restored identities from older jobs may lack offsets/leadout; without
