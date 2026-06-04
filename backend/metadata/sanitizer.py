@@ -240,13 +240,9 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
                 except (ValueError, TypeError):
                     pass
 
-    # Genre: from best or fallback
-    genre = best.genre or ""
-    if not genre:
-        for c in candidates[1:]:
-            if c.genre:
-                genre = c.genre
-                break
+    # Genre: from best, or a fallback candidate that actually agrees with the
+    # chosen release.
+    genre = _select_genre(best, candidates[1:])
 
     # Mark best candidate as selected
     async with async_session() as session:
@@ -337,6 +333,30 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         job_id, artist, album, confidence, issues,
     )
     return meta
+
+
+def _select_genre(best: MetadataCandidate, others: list[MetadataCandidate]) -> str:
+    """Pick a genre for the release: from best, else from an *agreeing* fallback.
+
+    MusicBrainz always returns genre=None (musicbrainz.py never populates it), so
+    when an MB candidate wins we have to fall back to another source's genre. But
+    the fallback must come from a candidate that actually describes the same
+    release — scavenging the first non-empty genre from any lower candidate let a
+    mis-matched iTunes hit for a *different* album inject an unrelated genre
+    (e.g. "R&B/ソウル" onto a rock album — Todoist 6gp5wgCCP78G7FCm). Require both
+    artist and album to match the selected release before adopting its genre.
+    """
+    if best.genre:
+        return best.genre
+    for c in others:
+        if not c.genre:
+            continue
+        if (
+            similarity(best.artist or "", c.artist or "") >= 0.8
+            and similarity(best.album or "", c.album or "") >= 0.8
+        ):
+            return c.genre
+    return ""
 
 
 def _kashidashi_item_id(candidate: MetadataCandidate | None) -> int | None:

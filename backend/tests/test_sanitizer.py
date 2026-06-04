@@ -452,3 +452,34 @@ async def test_disc_anchored_match_not_flagged_unanchored(monkeypatch, async_ses
     result = await sanitizer.sanitize_candidates("job-anch")
     issues = json.loads(result.issues or "[]")
     assert "unanchored_identification" not in issues
+
+
+# ───────────────── genre selection (no scavenging from mis-matches) ─────────────────
+
+
+def test_select_genre_prefers_best():
+    best = _cand(artist="A", album="B", genre="Rock")
+    others = [_cand(artist="A", album="B", genre="Pop")]
+    assert sanitizer._select_genre(best, others) == "Rock"
+
+
+def test_select_genre_falls_back_to_agreeing_candidate():
+    """Best (MB) has no genre — adopt it from another source for the SAME release."""
+    best = _cand(artist="YUMING", album="Shout at YUMING ROCKS", genre=None)
+    others = [
+        _cand(artist="YUMING", album="Shout at YUMING ROCKS", genre="ロック"),
+    ]
+    assert sanitizer._select_genre(best, others) == "ロック"
+
+
+def test_select_genre_ignores_mismatched_candidate():
+    """A genre from an unrelated mis-matched candidate must NOT be scavenged.
+
+    The "Shout at YUMING ROCKS" (rock) disc had a mis-matched iTunes hit for
+    "Melky Sedeck / Sister & Brother" (R&B/ソウル); its genre must not leak in
+    (Todoist 6gp5wgCCP78G7FCm)."""
+    best = _cand(artist="YUMING", album="Shout at YUMING ROCKS", genre=None)
+    others = [
+        _cand(artist="Melky Sedeck", album="Sister & Brother", genre="R&B／ソウル"),
+    ]
+    assert sanitizer._select_genre(best, others) == ""
