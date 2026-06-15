@@ -405,6 +405,11 @@ async def update_metadata(
 
     updates = request.model_dump(exclude_unset=True)
 
+    # Remember the identity we fetched artwork for, so we can tell whether the
+    # edit moved us to a different album (stale artwork must then be refreshed).
+    old_artist = meta.artist
+    old_album = meta.album
+
     # Recalculate album_base when album is edited
     if "album" in updates and updates["album"]:
         from backend.metadata.normalize import extract_disc_info
@@ -425,7 +430,26 @@ async def update_metadata(
         )
 
     await session.commit()
-    return {"status": "updated", "group_synced": synced_count}
+
+    # If the album identity changed, the auto-fetched artwork belongs to the
+    # wrong album — re-fetch so a corrected mis-identification doesn't keep the
+    # old cover. Manual uploads are preserved by refresh_artwork_for_edit.
+    artwork_refreshed = False
+    artist_changed = "artist" in updates and (updates.get("artist") or "") != (old_artist or "")
+    album_changed = "album" in updates and (updates.get("album") or "") != (old_album or "")
+    if artist_changed or album_changed:
+        from backend.metadata.artwork import refresh_artwork_for_edit
+        try:
+            await refresh_artwork_for_edit(job_id)
+            artwork_refreshed = True
+        except Exception:
+            logger.exception("Artwork refresh failed for job %s", job_id)
+
+    return {
+        "status": "updated",
+        "group_synced": synced_count,
+        "artwork_refreshed": artwork_refreshed,
+    }
 
 
 class ApproveRequest(BaseModel):

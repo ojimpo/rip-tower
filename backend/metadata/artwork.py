@@ -65,6 +65,73 @@ async def fetch_artwork(job_id: str) -> None:
     await _auto_select_best(job_id)
 
 
+async def invalidate_auto_artwork(job_id: str) -> int:
+    """Delete a job's auto-fetched (non-manual) artwork rows and files.
+
+    Manual uploads are preserved. Returns the number of rows removed. Used
+    when artist/album is edited so artwork fetched for a mis-identified album
+    (the Hard-Disk → 大発見 / 教育 mixups) doesn't linger after the fix.
+    """
+    from sqlalchemy import select
+
+    removed = 0
+    async with async_session() as session:
+        result = await session.execute(
+            select(Artwork).where(
+                Artwork.job_id == job_id,
+                Artwork.source != "manual",
+            )
+        )
+        for art in result.scalars():
+            if art.local_path:
+                try:
+                    Path(art.local_path).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "Failed to remove stale artwork file %s", art.local_path
+                    )
+            await session.delete(art)
+            removed += 1
+        await session.commit()
+    if removed:
+        logger.info("Invalidated %d auto-fetched artwork(s) for job %s", removed, job_id)
+    return removed
+
+
+async def refresh_artwork_for_edit(job_id: str) -> None:
+    """Re-fetch artwork after artist/album was manually corrected.
+
+    Drops the job's stale auto-fetched artwork — and, for a multi-disc album,
+    the rest of the group's, so `copy_from_group_sibling` can't re-seed the old
+    image — fetches fresh artwork for the edited disc, then propagates the new
+    selection to the siblings. Manual uploads are never touched.
+    """
+    from sqlalchemy import select
+
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        group = job.album_group if job else None
+        sibling_ids: list[str] = []
+        if group:
+            result = await session.execute(
+                select(Job.id).where(Job.album_group == group, Job.id != job_id)
+            )
+            sibling_ids = [r[0] for r in result.all()]
+
+    await invalidate_auto_artwork(job_id)
+    for sid in sibling_ids:
+        await invalidate_auto_artwork(sid)
+
+    # Fetch fresh artwork for the edited disc. With every group member's auto
+    # artwork cleared, copy_from_group_sibling won't short-circuit on a stale
+    # sibling, so this performs a real external lookup for the corrected album.
+    await fetch_artwork(job_id)
+
+    # Push the freshly-selected image out to siblings that now have none.
+    for sid in sibling_ids:
+        await copy_from_group_sibling(sid)
+
+
 async def _find_itunes_artwork_url(job_id: str) -> str | None:
     """Check iTunes candidates for pre-found artwork URLs."""
     from sqlalchemy import select
