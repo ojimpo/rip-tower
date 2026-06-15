@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 
 from backend.metadata import resolver
 from backend.models import Job, JobMetadata, MetadataCandidate
@@ -560,6 +561,153 @@ async def test_boost_penalizes_conflicting_disc_anchored_candidate(
     assert by_source["kashidashi"].confidence == 70  # borrowed CD untouched
     # Borrowed CD now outranks the colliding disc-anchored candidate.
     assert by_source["kashidashi"].confidence > by_source["musicbrainz"].confidence
+
+
+# ───────── _penalize_toc_length_mismatch ─────────
+
+
+import json as _json
+from types import SimpleNamespace
+
+
+def _identity_3x200():
+    """A disc of three ~200-second tracks (offsets in 75/sec sectors)."""
+    offsets = [150, 150 + 200 * 75, 150 + 400 * 75]
+    return SimpleNamespace(
+        offsets=offsets, leadout=600, track_count=3, total_seconds=600,
+    )
+
+
+@pytest.mark.asyncio
+async def test_toc_length_demotes_diverging_candidate(
+    monkeypatch, async_session_maker,
+):
+    """A TOC-matched MB release whose per-track durations are wildly off the
+    physical disc (the 総合 Disc2 → Real Music Box collision) is dropped below
+    auto-approve even though MB returned it at confidence 90."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-toc", drive_id="d", disc_id="cb0dba0f"))
+        s.add(MetadataCandidate(
+            job_id="job-toc", source="musicbrainz",
+            artist="Various Artists", album="The Real Music Box", confidence=90,
+            evidence=_json.dumps(
+                {"match": "toc_submission", "track_lengths": [100, 350, 500]},
+                ensure_ascii=False,
+            ),
+        ))
+        await s.commit()
+
+    await resolver._penalize_toc_length_mismatch("job-toc", _identity_3x200())
+
+    async with async_session_maker() as s:
+        c = (await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-toc")
+        )).scalars().first()
+
+    assert c.confidence == resolver._TOC_LENGTH_FLOOR
+    assert "toc_length_mismatch" in (c.evidence or "")
+
+
+@pytest.mark.asyncio
+async def test_toc_length_keeps_matching_candidate(
+    monkeypatch, async_session_maker,
+):
+    """A genuine same-pressing TOC match (per-track durations within a couple
+    seconds) keeps its confidence."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-ok", drive_id="d", disc_id="cb0dba0f"))
+        s.add(MetadataCandidate(
+            job_id="job-ok", source="musicbrainz",
+            artist="東京事変", album="総合", confidence=90,
+            evidence=_json.dumps(
+                {"match": "toc_submission", "track_lengths": [200, 199, 198]},
+                ensure_ascii=False,
+            ),
+        ))
+        await s.commit()
+
+    await resolver._penalize_toc_length_mismatch("job-ok", _identity_3x200())
+
+    async with async_session_maker() as s:
+        c = (await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-ok")
+        )).scalars().first()
+
+    assert c.confidence == 90
+
+
+@pytest.mark.asyncio
+async def test_toc_length_ignores_candidates_without_lengths(
+    monkeypatch, async_session_maker,
+):
+    """Candidates without track_lengths evidence (CDDB, kashidashi, MB releases
+    that omit lengths) are untouched — we can't judge what we can't measure."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-nolen", drive_id="d", disc_id="cb0dba0f"))
+        s.add(MetadataCandidate(
+            job_id="job-nolen", source="cddb",
+            artist="A", album="B", confidence=60,
+        ))
+        # MB candidate where every track length was missing (all zeros)
+        s.add(MetadataCandidate(
+            job_id="job-nolen", source="musicbrainz",
+            artist="C", album="D", confidence=90,
+            evidence=_json.dumps(
+                {"match": "toc_submission", "track_lengths": [0, 0, 0]},
+                ensure_ascii=False,
+            ),
+        ))
+        await s.commit()
+
+    await resolver._penalize_toc_length_mismatch("job-nolen", _identity_3x200())
+
+    async with async_session_maker() as s:
+        by_source = {
+            c.source: c
+            for c in (await s.execute(
+                select(MetadataCandidate)
+                .where(MetadataCandidate.job_id == "job-nolen")
+            )).scalars()
+        }
+
+    assert by_source["cddb"].confidence == 60
+    assert by_source["musicbrainz"].confidence == 90
+
+
+@pytest.mark.asyncio
+async def test_toc_length_skips_when_no_disc_toc(
+    monkeypatch, async_session_maker,
+):
+    """Older jobs without stored offsets/leadout can't be judged — no change."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-old", drive_id="d", disc_id="x"))
+        s.add(MetadataCandidate(
+            job_id="job-old", source="musicbrainz",
+            artist="C", album="D", confidence=90,
+            evidence=_json.dumps(
+                {"match": "toc_submission", "track_lengths": [1, 2, 3]},
+                ensure_ascii=False,
+            ),
+        ))
+        await s.commit()
+
+    no_toc = SimpleNamespace(offsets=[], leadout=0, track_count=0, total_seconds=0)
+    await resolver._penalize_toc_length_mismatch("job-old", no_toc)
+
+    async with async_session_maker() as s:
+        c = (await s.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == "job-old")
+        )).scalars().first()
+
+    assert c.confidence == 90
 
 
 @pytest.mark.asyncio

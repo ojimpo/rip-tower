@@ -170,6 +170,25 @@ def _track_entries(tracks: list[dict], release_artist: str) -> list[str]:
     return out
 
 
+def _track_lengths(tracks: list[dict]) -> list[int]:
+    """Per-track durations in whole seconds from a MusicBrainz medium.
+
+    Used to cross-check a fuzzy TOC match against the physical disc's actual
+    per-track lengths. MB's /discid/-?toc= endpoint matches loosely and will
+    return an unrelated release that merely shares a track count, so comparing
+    durations lets the resolver reject the collision (Todoist 6grvQh7mwWmPgX9F:
+    東京事変「総合」Disc2 mis-matched to "The Real Music Box", 625 s off). A
+    track with no recorded length becomes 0 (skipped by the comparison).
+    """
+    lengths: list[int] = []
+    for t in tracks:
+        ms = t.get("length")
+        if ms is None:
+            ms = (t.get("recording") or {}).get("length")
+        lengths.append(int(ms) // 1000 if ms else 0)
+    return lengths
+
+
 def _is_cd_medium(medium: dict) -> bool:
     """Whether a MusicBrainz medium represents a ripable CD-family disc.
 
@@ -329,7 +348,11 @@ class MusicBrainzSource(MetadataSource):
                         continue
                     disc_number = chosen.get("position", 1)
 
-                    tracks = _track_entries(chosen.get("tracks", []), artist)
+                    chosen_tracks = chosen.get("tracks", [])
+                    tracks = _track_entries(chosen_tracks, artist)
+                    track_lengths = _track_lengths(
+                        chosen_tracks[:track_count] if track_count else chosen_tracks
+                    )
 
                     candidates.append({
                         "artist": artist,
@@ -352,6 +375,7 @@ class MusicBrainzSource(MetadataSource):
                             "mb_release": release.get("id", ""),
                             "disc_number": disc_number,
                             "total_discs": total_discs,
+                            "track_lengths": track_lengths,
                         }, ensure_ascii=False),
                     })
 

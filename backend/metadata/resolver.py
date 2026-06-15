@@ -93,6 +93,13 @@ async def resolve(
         if isinstance(result, Exception):
             logger.warning("Phase 2 source %s failed: %s", source.name, result)
 
+    # Reject fuzzy TOC matches whose per-track durations disagree with the
+    # physical disc. MB's /discid/-?toc= matches loosely and can return an
+    # unrelated release that merely shares a track count at confidence 90,
+    # overwriting the correct kashidashi/CDDB answer (Todoist 6grvQh7mwWmPgX9F).
+    # Run before the kashidashi boost so the demoted collision can't anchor.
+    await _penalize_toc_length_mismatch(job_id, identity)
+
     # Cross-reference candidates against currently-borrowed kashidashi items.
     # When MB's disc-ID lookup returns multiple releases sharing one TOC (or a
     # different user's mis-submission for an unrelated disc-ID), a candidate
@@ -262,6 +269,103 @@ _KASHIDASHI_SIM_THRESHOLD = 0.6
 # below a typical recency-fallback borrowed candidate (50–80) so review leads
 # with the CD the user physically holds rather than the colliding release.
 _KASHIDASHI_CONFLICT_FLOOR = 40
+
+
+# Confidence a TOC-matched candidate is knocked down to when its per-track
+# durations disagree with the physical disc. Below auto-approve (50), the
+# kashidashi-conflict floor (40), and a typical recency-fallback borrowed
+# candidate so the correct disc leads review instead of the collision.
+_TOC_LENGTH_FLOOR = 30
+# A genuine same-pressing TOC match has near-zero per-track drift; MB recording
+# lengths vs physical track lengths differ by at most a second or two. Tolerate
+# small drift but reject the gross divergence a different release produces.
+_TOC_LENGTH_TOTAL_TOLERANCE = 60   # summed abs per-track deviation (seconds)
+_TOC_LENGTH_TRACK_TOLERANCE = 30   # worst single-track deviation (seconds)
+
+
+def _disc_track_seconds(identity: Any) -> list[int]:
+    """Per-track durations (whole seconds) derived from the physical disc TOC.
+
+    offsets are LBA sectors (75/sec); leadout is whole seconds. Track i spans
+    offsets[i]..offsets[i+1], the last track runs to the leadout.
+    """
+    offsets = list(getattr(identity, "offsets", None) or [])
+    leadout_seconds = getattr(identity, "leadout", 0) or 0
+    if not offsets or not leadout_seconds:
+        return []
+    bounds = offsets + [leadout_seconds * 75]
+    return [
+        max(0, (bounds[i + 1] - bounds[i]) // 75) for i in range(len(offsets))
+    ]
+
+
+async def _penalize_toc_length_mismatch(job_id: str, identity: Any) -> None:
+    """Demote disc-anchored candidates whose track durations don't fit the disc.
+
+    Only TOC-submission candidates carry `track_lengths` evidence (MusicBrainz
+    disc-ID lookup). When MB returns a release that shares the disc's track
+    count but is a different recording, the per-track durations diverge sharply;
+    comparing them against the physical disc rejects the collision before it can
+    win on confidence alone.
+    """
+    disc_secs = _disc_track_seconds(identity)
+    if not disc_secs:
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(MetadataCandidate).where(MetadataCandidate.job_id == job_id)
+        )
+        candidates = list(result.scalars().all())
+
+        changed = False
+        for c in candidates:
+            if not c.evidence:
+                continue
+            try:
+                evidence = json.loads(c.evidence)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            cand_secs = evidence.get("track_lengths")
+            # Need a full, non-placeholder length array of the same shape as the
+            # disc. MB occasionally omits lengths (all zeros) — can't judge those.
+            if (
+                not isinstance(cand_secs, list)
+                or len(cand_secs) != len(disc_secs)
+                or not any(cand_secs)
+            ):
+                continue
+
+            diffs = [abs(int(a) - b) for a, b in zip(cand_secs, disc_secs)]
+            total_dev = sum(diffs)
+            max_dev = max(diffs)
+            if (
+                total_dev <= _TOC_LENGTH_TOTAL_TOLERANCE
+                and max_dev <= _TOC_LENGTH_TRACK_TOLERANCE
+            ):
+                continue
+
+            old_conf = c.confidence or 0
+            if old_conf <= _TOC_LENGTH_FLOOR:
+                continue
+            c.confidence = _TOC_LENGTH_FLOOR
+            evidence["toc_length_mismatch"] = {
+                "previous_confidence": old_conf,
+                "total_deviation": total_dev,
+                "max_deviation": max_dev,
+                "floor": _TOC_LENGTH_FLOOR,
+            }
+            c.evidence = json.dumps(evidence, ensure_ascii=False)
+            changed = True
+            logger.info(
+                "Penalized TOC candidate id=%s (%s/%s) %d→%d: per-track "
+                "durations off by %ds total / %ds worst from physical disc",
+                c.id, c.source, c.album, old_conf, _TOC_LENGTH_FLOOR,
+                total_dev, max_dev,
+            )
+
+        if changed:
+            await session.commit()
 
 
 async def _boost_kashidashi_matches(job_id: str) -> None:
