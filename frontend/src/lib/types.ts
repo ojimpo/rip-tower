@@ -11,6 +11,8 @@ export interface Drive {
     artist: string | null;
     album: string | null;
     track_count: number | null;
+    already_ripped?: boolean;
+    ripped_job_id?: string | null;
   } | null;
   auto_rip: boolean;
   auto_rip_source_type: string;

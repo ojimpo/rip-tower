@@ -33,6 +33,40 @@ class DriveUpdateRequest(BaseModel):
     auto_rip_source_type: str | None = None
 
 
+async def _find_completed_rip(
+    session: AsyncSession,
+    disc_id: str | None,
+    toc_hash: str | None,
+    exclude_job_id: str | None,
+):
+    """Return the most recent completed Job for this physical disc, if any.
+
+    Prefers an exact toc_hash match (SHA-256 of the raw cd-discid output) and
+    only falls back to disc_id when no toc_hash is on hand (e.g. a disc known
+    solely from the cached identify). disc_id alone can collide across unrelated
+    borrowed CDs — see [[project_disc_swap_recurrence]] — so it's the weaker
+    signal, used just so the UI can warn "you've ripped this before".
+    """
+    from backend.models import Job
+
+    if toc_hash:
+        cond = Job.toc_hash == toc_hash
+    elif disc_id:
+        cond = Job.disc_id == disc_id
+    else:
+        return None
+
+    query = (
+        select(Job)
+        .where(cond, Job.status == "complete")
+        .order_by(Job.completed_at.desc())
+        .limit(1)
+    )
+    if exclude_job_id:
+        query = query.where(Job.id != exclude_job_id)
+    return (await session.execute(query)).scalar_one_or_none()
+
+
 @router.get("/drives")
 async def list_drives(session: AsyncSession = Depends(get_session)):
     """List all known drives with connection status and disc info."""
@@ -57,6 +91,12 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
         # review job doesn't block the drive — the user can swap the disc and
         # start a fresh rip while the previous job stays parked elsewhere.
         _DRIVE_ACTIVE_EXCLUDED = ["complete", "error", "review"]
+        # Identity of the disc currently in the drive, used to spot a re-insert
+        # of something already ripped. Filled from the active job (exact, has
+        # toc_hash) or, failing that, the cached identify (disc_id only).
+        disc_disc_id: str | None = None
+        disc_toc_hash: str | None = None
+        disc_exclude_job_id: str | None = None
         if drive.current_path:
             active_job = await session.execute(
                 select(Job)
@@ -81,6 +121,9 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                     "album": (meta.album_base or meta.album) if meta else None,
                     "track_count": track_count,
                 }
+                disc_disc_id = active_job.disc_id
+                disc_toc_hash = active_job.toc_hash
+                disc_exclude_job_id = active_job.id
 
         # Fall back to cached disc info from identify
         if not disc_info and drive.cached_disc_id:
@@ -89,6 +132,17 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
                 "album": drive.cached_album,
                 "track_count": drive.cached_track_count,
             }
+            disc_disc_id = drive.cached_disc_id
+
+        # Flag a disc we've already ripped before so the user doesn't re-rip a
+        # CD that only *looks* unfamiliar because of a metadata mis-ID (the
+        # 総合 Disc2 → "Real Music Box" re-insert, Todoist 6grvQh4Fp8pH8HCm).
+        if disc_info:
+            prior = await _find_completed_rip(
+                session, disc_disc_id, disc_toc_hash, disc_exclude_job_id,
+            )
+            disc_info["already_ripped"] = prior is not None
+            disc_info["ripped_job_id"] = prior.id if prior else None
 
         # Surface only running jobs as "active" on the drive — review is
         # excluded (see above) so the Rip button stays available.

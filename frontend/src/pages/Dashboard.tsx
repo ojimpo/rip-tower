@@ -544,6 +544,14 @@ export default function Dashboard() {
                               Auto
                             </span>
                           )}
+                          {drive.disc_info?.already_ripped && (
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-400/15 text-amber-300 font-medium"
+                              title="このディスクは取り込み済みです"
+                            >
+                              取り込み済み
+                            </span>
+                          )}
                         </div>
                         {drive.disc_info ? (
                           <p className="text-xs text-gray-400 truncate mt-0.5">
@@ -551,6 +559,18 @@ export default function Dashboard() {
                               ? `${drive.disc_info.artist} / ${drive.disc_info.album}`
                               : "不明なCD"}
                             {drive.disc_info.track_count ? ` · ${drive.disc_info.track_count} tracks` : ""}
+                            {drive.disc_info.already_ripped && drive.disc_info.ripped_job_id && (
+                              <>
+                                {" · "}
+                                <Link
+                                  to={`/job/${drive.disc_info.ripped_job_id}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-amber-300 hover:underline"
+                                >
+                                  取り込み済みのジョブを開く
+                                </Link>
+                              </>
+                            )}
                           </p>
                         ) : (
                           <p className="text-xs text-gray-500 mt-0.5">

@@ -86,6 +86,65 @@ class TestDrivesAPI:
         assert data[0]["active_job_status"] == "ripping"
 
 
+    @pytest.mark.asyncio
+    async def test_already_ripped_flag_set_when_disc_matches_complete_job(
+        self, client, db_session,
+    ):
+        """A re-inserted disc whose cached disc_id matches a completed rip is
+        flagged so the user doesn't re-rip a CD they already own."""
+        db_session.add(Drive(
+            drive_id="usb-dup",
+            name="Drive-Dup",
+            current_path=None,            # offline: disc_info comes from cache
+            cached_disc_id="cb0dba0f",
+            cached_artist="東京事変",
+            cached_album="総合",
+            cached_track_count=12,
+        ))
+        db_session.add(Job(
+            id="job-prior",
+            status="complete",
+            source_type="owned",
+            disc_id="cb0dba0f",
+            toc_hash="hash-prior",
+        ))
+        await db_session.commit()
+
+        resp = await client.get("/api/drives")
+        assert resp.status_code == 200
+        info = resp.json()[0]["disc_info"]
+        assert info["already_ripped"] is True
+        assert info["ripped_job_id"] == "job-prior"
+
+    @pytest.mark.asyncio
+    async def test_already_ripped_flag_false_for_unseen_disc(
+        self, client, db_session,
+    ):
+        """A disc with no prior completed rip is not flagged."""
+        db_session.add(Drive(
+            drive_id="usb-new",
+            name="Drive-New",
+            current_path=None,
+            cached_disc_id="ffffffff",
+            cached_artist="New Artist",
+            cached_album="New Album",
+            cached_track_count=10,
+        ))
+        # An unrelated completed job with a different disc.
+        db_session.add(Job(
+            id="job-other",
+            status="complete",
+            source_type="owned",
+            disc_id="00000000",
+        ))
+        await db_session.commit()
+
+        resp = await client.get("/api/drives")
+        info = resp.json()[0]["disc_info"]
+        assert info["already_ripped"] is False
+        assert info["ripped_job_id"] is None
+
+
 class TestJobsAPI:
     """Tests for GET /api/jobs."""
 
