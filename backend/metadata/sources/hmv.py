@@ -26,6 +26,33 @@ _HMV_HEADERS = {
 }
 
 
+def _extract_numbered_run(matches) -> list[str]:
+    """Keep the longest block of consecutively-numbered titles starting at 1.
+
+    Product pages are full of unrelated "N. text" fragments (prices, dates,
+    recommendation lists) that the loose track regexes also match. A real
+    tracklist is the one run numbered 1, 2, 3, ...; stray numbers between run
+    members are skipped, and the longest run wins.
+    """
+    best: list[str] = []
+    current: list[str] = []
+    expected = 1
+    for m in matches:
+        num = int(m.group(1))
+        title = m.group(2).strip()
+        if num == 1:
+            if len(current) > len(best):
+                best = current
+            current = [title]
+            expected = 2
+        elif num == expected and current:
+            current.append(title)
+            expected += 1
+    if len(current) > len(best):
+        best = current
+    return best
+
+
 class HmvSource(MetadataSource):
     @property
     def name(self) -> str:
@@ -160,12 +187,13 @@ class HmvSource(MetadataSource):
             found_label = m.group(1).strip()
 
         # Parse track listing
-        track_titles: list[str] = []
-        for tm in re.finditer(r"(\d{1,2})\s*[·.．]\s*\[?([^\]\n<]{2,})\]?", body):
-            track_titles.append(tm.group(2).strip())
+        track_titles = _extract_numbered_run(
+            re.finditer(r"(\d{1,2})\s*[·.．]\s*\[?([^\]\n<]{2,})\]?", body)
+        )
         if not track_titles:
-            for tm in re.finditer(r"<li[^>]*>\s*(\d{1,2})\s*[.．·]\s*([^<]+)", body):
-                track_titles.append(tm.group(2).strip())
+            track_titles = _extract_numbered_run(
+                re.finditer(r"<li[^>]*>\s*(\d{1,2})\s*[.．·]\s*([^<]+)", body)
+            )
 
         if not album:
             logger.debug("HMV: could not parse album from SKU %s", sku)

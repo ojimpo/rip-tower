@@ -381,7 +381,14 @@ async def _fetch_discogs_artwork(job_id: str, artist: str, album: str) -> None:
 async def _save_artwork(
     job_id: str, source: str, url: str, image_data: bytes
 ) -> None:
-    """Save artwork image to disk and create an Artwork record."""
+    """Save artwork image to disk and upsert the Artwork record.
+
+    Auto-fetched sources keep one row per (job_id, source): re-resolves and
+    post-edit refreshes update it in place instead of piling up duplicate
+    rows for the same image. Manual uploads don't go through here.
+    """
+    from sqlalchemy import select
+
     try:
         img = Image.open(BytesIO(image_data))
         width, height = img.size
@@ -398,16 +405,38 @@ async def _save_artwork(
     file_size = len(image_data)
 
     async with async_session() as session:
-        artwork = Artwork(
-            job_id=job_id,
-            source=source,
-            url=url,
-            local_path=str(filepath),
-            width=width,
-            height=height,
-            file_size=file_size,
+        result = await session.execute(
+            select(Artwork).where(
+                Artwork.job_id == job_id, Artwork.source == source
+            )
         )
-        session.add(artwork)
+        rows = list(result.scalars().all())
+        if rows:
+            artwork, *extra = rows
+            # Same source refetched with a different format leaves the old
+            # file behind — remove it before repointing the row.
+            if artwork.local_path and artwork.local_path != str(filepath):
+                Path(artwork.local_path).unlink(missing_ok=True)
+            artwork.url = url
+            artwork.local_path = str(filepath)
+            artwork.width = width
+            artwork.height = height
+            artwork.file_size = file_size
+            # Clean up duplicates accumulated before upserting existed.
+            for dup in extra:
+                if dup.local_path and dup.local_path != str(filepath):
+                    Path(dup.local_path).unlink(missing_ok=True)
+                await session.delete(dup)
+        else:
+            session.add(Artwork(
+                job_id=job_id,
+                source=source,
+                url=url,
+                local_path=str(filepath),
+                width=width,
+                height=height,
+                file_size=file_size,
+            ))
         await session.commit()
 
     logger.info(

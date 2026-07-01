@@ -142,3 +142,42 @@ async def test_refresh_keeps_manual_selection(
         )).scalars())
     assert len(rows) == 1
     assert rows[0].source == "manual" and rows[0].selected
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    from io import BytesIO
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (width, height), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_save_artwork_upserts_per_source(
+    monkeypatch, async_session_maker, tmp_path,
+):
+    """Refetching the same source updates the existing row instead of piling
+    up duplicates (re-resolve / post-edit refresh case)."""
+    monkeypatch.setattr(artwork, "async_session", async_session_maker)
+    monkeypatch.setattr(artwork, "ARTWORK_DIR", tmp_path)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-up", drive_id="d", disc_id="u"))
+        await s.commit()
+
+    await artwork._save_artwork("job-up", "itunes", "http://a", _png_bytes(10, 10))
+    await artwork._save_artwork("job-up", "itunes", "http://b", _png_bytes(20, 20))
+    # A different source still gets its own row
+    await artwork._save_artwork("job-up", "discogs", "http://c", _png_bytes(30, 30))
+
+    async with async_session_maker() as s:
+        rows = list((await s.execute(
+            select(Artwork).where(Artwork.job_id == "job-up")
+        )).scalars())
+
+    by_source = {r.source: r for r in rows}
+    assert len(rows) == 2
+    assert by_source["itunes"].url == "http://b"
+    assert by_source["itunes"].width == 20
+    assert by_source["discogs"].width == 30

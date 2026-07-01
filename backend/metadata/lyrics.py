@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from backend.config import get_config
 from backend.database import async_session
+from backend.metadata.normalize import similarity
 from backend.models import JobMetadata, Track
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,13 @@ async def _fetch_lrclib(
 async def _lrclib_search(
     client: httpx.AsyncClient, artist: str, title: str
 ) -> tuple[str | None, str | None]:
-    """Fallback: search LRCLIB when exact match fails."""
+    """Fallback: search LRCLIB when exact match fails.
+
+    The search endpoint is fuzzy and its first hit is often a different song
+    entirely — only adopt a result whose artist and title actually match.
+    0.8 tolerates containment (tie-up suffixes on titles, "feat." credits)
+    while rejecting unrelated hits.
+    """
     try:
         resp = await client.get(f"{LRCLIB_BASE}/search", params={
             "q": f"{artist} {title}",
@@ -170,14 +177,18 @@ async def _lrclib_search(
             return None, None
 
         results = resp.json()
-        if not results:
+        if not isinstance(results, list):
             return None, None
 
-        # Take first result
-        best = results[0]
-        synced = best.get("syncedLyrics") or None
-        plain = best.get("plainLyrics") or None
-        return synced, plain
+        for r in results:
+            if (similarity(artist, r.get("artistName") or "") < 0.8
+                    or similarity(title, r.get("trackName") or "") < 0.8):
+                continue
+            synced = r.get("syncedLyrics") or None
+            plain = r.get("plainLyrics") or None
+            if synced or plain:
+                return synced, plain
+        return None, None
 
     except Exception:
         return None, None

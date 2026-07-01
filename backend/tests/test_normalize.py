@@ -99,6 +99,14 @@ class TestSimilarity:
     def test_japanese_matching(self):
         assert similarity("東京タワー", "東京タワー") == 1.0
 
+    def test_anagram_scores_low(self):
+        """The old character-bag ratio scored anagram-ish different names as
+        identical; order must matter."""
+        assert similarity("stop", "pots") < 0.8
+
+    def test_reordered_words_score_below_exact(self):
+        assert similarity("love best", "best love") < 1.0
+
 
 class TestFullwidthToHalfwidth:
     """Tests for fullwidth_to_halfwidth()."""

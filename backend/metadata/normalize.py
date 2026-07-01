@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 # ── Disc pattern ──
 
@@ -44,7 +45,14 @@ def norm(s: str) -> str:
 
 
 def similarity(a: str, b: str) -> float:
-    """Substring-based similarity between two strings (after normalization)."""
+    """Similarity between two strings after normalization.
+
+    Exact match → 1.0; substring containment → 0.8 (an album title inside a
+    longer library record still counts). Otherwise the SequenceMatcher ratio —
+    order-aware, unlike the character-bag ratio it replaced, which scored
+    anagram-ish different names as near-identical and let mismatches clear
+    the 0.6-0.85 thresholds used across the resolver.
+    """
     na, nb = norm(a), norm(b)
     if not na or not nb:
         return 0.0
@@ -52,8 +60,7 @@ def similarity(a: str, b: str) -> float:
         return 1.0
     if na in nb or nb in na:
         return 0.8
-    common = sum(1 for c in na if c in nb)
-    return common / max(len(na), len(nb))
+    return SequenceMatcher(None, na, nb).ratio()
 
 
 def extract_disc_info(album: str) -> tuple[str, int | None]:

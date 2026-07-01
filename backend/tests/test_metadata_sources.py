@@ -171,6 +171,36 @@ async def test_itunes_no_disc_hint_picks_track_count_matching_disc(monkeypatch):
     assert evidence["total_discs"] == 2
 
 
+# ─────────────────────────── HMV ───────────────────────────
+
+
+def test_hmv_numbered_run_keeps_tracklist_drops_stray_numbers():
+    """Prices/dates/recommendation numbers around the real 1,2,3... run are dropped."""
+    import re
+    from backend.metadata.sources.hmv import _extract_numbered_run
+
+    body = (
+        "価格：1.500円<br>"
+        "1·Track One<br>2·Track Two<br>3·Track Three<br>"
+        "おすすめ 5. Other Item<br>"
+    )
+    titles = _extract_numbered_run(
+        re.finditer(r"(\d{1,2})\s*[·.．]\s*\[?([^\]\n<]{2,})\]?", body)
+    )
+    assert titles == ["Track One", "Track Two", "Track Three"]
+
+
+def test_hmv_numbered_run_empty_when_no_consecutive_block():
+    import re
+    from backend.metadata.sources.hmv import _extract_numbered_run
+
+    body = "発売日：2011<br>12. 月 3. 日<br>"
+    titles = _extract_numbered_run(
+        re.finditer(r"(\d{1,2})\s*[·.．]\s*\[?([^\]\n<]{2,})\]?", body)
+    )
+    assert titles == []
+
+
 # ─────────────────────── MusicBrainz text search ──────────────────────
 
 
