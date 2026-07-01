@@ -17,9 +17,11 @@ import unicodedata
 from sqlalchemy import select
 
 from backend.database import async_session
+from backend.metadata.evidence import parse_evidence
 from backend.metadata.normalize import (
     extract_disc_info,
     fullwidth_to_halfwidth,
+    norm,
     normalize_various_artists,
     similarity,
 )
@@ -57,7 +59,11 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
         if c.track_titles:
             try:
                 titles = json.loads(c.track_titles)
-                titles = [_sanitize_text(t) for t in titles]
+                # Coerce nulls/non-strings to "" so downstream regex checks
+                # never see a None title from a sloppy source payload.
+                titles = [
+                    _sanitize_text(t) if isinstance(t, str) else "" for t in titles
+                ]
                 c.track_titles = json.dumps(titles, ensure_ascii=False)
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -76,15 +82,11 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     # Disc info extraction — prefer source data (e.g. MusicBrainz medium position)
     album_base, disc_number = extract_disc_info(album)
     source_total_discs = None
-    if best.evidence:
-        try:
-            ev = json.loads(best.evidence)
-            if ev.get("disc_number"):
-                disc_number = disc_number or ev["disc_number"]
-            if ev.get("total_discs"):
-                source_total_discs = ev["total_discs"]
-        except (json.JSONDecodeError, TypeError):
-            pass
+    best_evidence = parse_evidence(best)
+    if best_evidence.get("disc_number"):
+        disc_number = disc_number or best_evidence["disc_number"]
+    if best_evidence.get("total_discs"):
+        source_total_discs = best_evidence["total_discs"]
 
     # If disc_number was extracted from album name but no total_discs from source,
     # infer total_discs >= disc_number (at least 2) so auto-grouping can kick in.
@@ -178,10 +180,13 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     if _has_parenthesized_variant(artist) or _has_parenthesized_variant(album):
         issues.append("parenthesized_variant")
 
-    # Contradiction detection — different candidates disagree on artist/album
+    # Contradiction detection — different candidates disagree on artist/album.
+    # Compare normalized forms so case/width/script-cosmetic variants of the
+    # same name ("AMY WINEHOUSE" vs "Amy Winehouse") don't fake a contradiction.
     if len(candidates) >= 2:
-        artists_seen = {c.artist for c in candidates[:3] if c.artist and c.confidence and c.confidence >= 50}
-        albums_seen = {c.album for c in candidates[:3] if c.album and c.confidence and c.confidence >= 50}
+        strong = [c for c in candidates[:3] if c.confidence and c.confidence >= 50]
+        artists_seen = {norm(c.artist) for c in strong if c.artist}
+        albums_seen = {norm(c.album) for c in strong if c.album}
         if len(artists_seen) > 1:
             issues.append("artist_contradiction")
         if len(albums_seen) > 1:
@@ -396,14 +401,7 @@ def _kashidashi_item_id(candidate: MetadataCandidate | None) -> int | None:
       - `kashidashi_confirmed.item_id` is set by the resolver's cross-reference
         boost on non-kashidashi candidates that fuzzy-match a borrowed CD.
     """
-    if not candidate or not candidate.evidence:
-        return None
-    try:
-        ev = json.loads(candidate.evidence)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(ev, dict):
-        return None
+    ev = parse_evidence(candidate)
     confirmed = ev.get("kashidashi_confirmed")
     if isinstance(confirmed, dict) and confirmed.get("item_id"):
         return confirmed["item_id"]
@@ -418,13 +416,7 @@ def _candidate_match_kind(candidate: MetadataCandidate | None) -> str | None:
     e.g. 'toc_submission'/'exact_discid' (disc-anchored), 'text_search'/'search'
     (text-derived), 'recency_fallback' (a borrowed-CD seed with no disc match).
     """
-    if not candidate or not candidate.evidence:
-        return None
-    try:
-        ev = json.loads(candidate.evidence)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return ev.get("match") if isinstance(ev, dict) else None
+    return parse_evidence(candidate).get("match")
 
 
 async def _ensure_placeholder_metadata(job_id: str) -> None:
@@ -485,15 +477,11 @@ def candidate_expected_track_count(candidate: MetadataCandidate) -> int | None:
                 return len(titles)
         except (json.JSONDecodeError, TypeError):
             pass
-    if candidate.evidence:
-        try:
-            ev = json.loads(candidate.evidence)
-            for key in ("track_count", "mb_track_count", "disc_track_count"):
-                val = ev.get(key)
-                if isinstance(val, int) and val > 0:
-                    return val
-        except (json.JSONDecodeError, TypeError):
-            pass
+    ev = parse_evidence(candidate)
+    for key in ("track_count", "mb_track_count", "disc_track_count"):
+        val = ev.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
     return None
 
 
@@ -567,6 +555,9 @@ def _pick_best_track_titles(
             continue
         if not titles or not isinstance(titles, list):
             continue
+        # Null entries from a sloppy source payload must not crash the regex
+        # checks below.
+        titles = [t if isinstance(t, str) else "" for t in titles]
 
         score = c.confidence or 0
 

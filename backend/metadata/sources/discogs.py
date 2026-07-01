@@ -108,7 +108,8 @@ class DiscogsSource(MetadataSource):
                 candidates.append({
                     "artist": r_artist,
                     "album": r_album,
-                    "year": (r.get("year") or ""),
+                    # None, not "" — the year column is an integer
+                    "year": r.get("year") or None,
                     "confidence": min(conf, 75),
                     "track_titles": json.dumps(tracks, ensure_ascii=False) if tracks else None,
                     "disc_number": disc_number,

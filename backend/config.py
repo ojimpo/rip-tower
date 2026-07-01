@@ -6,44 +6,9 @@ from typing import Optional
 
 import yaml
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "/app/data/config.yaml"))
 DATA_DIR = CONFIG_PATH.parent
-
-DEFAULT_CONFIG = {
-    "general": {
-        "auto_approve_threshold": 85,
-        "reminder_initial_hours": 6,
-        "reminder_interval_hours": 24,
-        "base_url": "",
-    },
-    "output": {
-        "format": "flac",
-        "quality": 8,
-        "music_dir": "/mnt/media/music",
-        "incoming_dir": "/mnt/media/audio/_incoming",
-        "folder_template": "{artist}/{album}",
-        "file_template": "{track_num} {artist} - {title}",
-    },
-    "integrations": {
-        "discord_webhook": "",
-        "discogs_token": "",
-        "musixmatch_token": "",
-        "plex_url": "",
-        "plex_token": "",
-        "plex_section_id": None,
-        "llm_api_key": "",
-        "llm_model": "haiku",
-        "kashidashi_url": "http://kashidashi-app-web-1:18080",
-        "gnudb_url": "https://gnudb.gnudb.org",
-        "gnudb_email": "",
-        "gnudb_client_name": "rip-tower",
-        "gnudb_client_version": "0.1.0",
-        "gnudb_enabled": False,
-    },
-}
-
 
 class GeneralConfig(BaseModel):
     auto_approve_threshold: int = 85
@@ -84,7 +49,8 @@ class IntegrationsConfig(BaseModel):
     llm_api_key: str = ""
     llm_model: str = "haiku"
     kashidashi_url: str = "http://kashidashi-app-web-1:18080"
-    gnudb_url: str = "https://gnudb.gnudb.org"
+    # GnuDB serves /~cddb/* over plain HTTP only; https returns 404.
+    gnudb_url: str = "http://gnudb.gnudb.org"
     gnudb_email: str = ""
     gnudb_client_name: str = "rip-tower"
     gnudb_client_version: str = "0.1.0"

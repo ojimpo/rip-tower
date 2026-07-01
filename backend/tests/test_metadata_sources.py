@@ -136,6 +136,41 @@ async def test_itunes_empty_hints_returns_nothing(monkeypatch):
     assert candidates == []
 
 
+@pytest.mark.asyncio
+async def test_itunes_no_disc_hint_picks_track_count_matching_disc(monkeypatch):
+    """Without a disc hint, the disc whose track count matches the physical
+    disc wins — ripping disc 2 must not silently get disc 1's titles."""
+    from backend.metadata.sources import itunes as itunes_mod
+
+    search_resp = _Resp(200, {"results": [{
+        "wrapperType": "collection",
+        "collectionId": 7,
+        "collectionName": "Box",
+        "artistName": "X",
+    }]})
+    lookup_resp = _Resp(200, {"results": [
+        {"wrapperType": "track", "discNumber": 1, "trackNumber": 1, "trackName": "D1-1"},
+        {"wrapperType": "track", "discNumber": 1, "trackNumber": 2, "trackName": "D1-2"},
+        {"wrapperType": "track", "discNumber": 2, "trackNumber": 1, "trackName": "D2-1"},
+        {"wrapperType": "track", "discNumber": 2, "trackNumber": 2, "trackName": "D2-2"},
+        {"wrapperType": "track", "discNumber": 2, "trackNumber": 3, "trackName": "D2-3"},
+    ]})
+    _patch_httpx(monkeypatch, itunes_mod, {
+        "https://itunes.apple.com/search": search_resp,
+        "https://itunes.apple.com/lookup": lookup_resp,
+    })
+
+    src = ItunesSource()
+    identity = SimpleNamespace(track_count=3)
+    candidates = await src.search(identity, hints={"artist": "X", "title": "Box"})
+
+    assert candidates
+    assert json.loads(candidates[0]["track_titles"]) == ["D2-1", "D2-2", "D2-3"]
+    evidence = json.loads(candidates[0]["evidence"])
+    assert evidence["disc_number"] == 2
+    assert evidence["total_discs"] == 2
+
+
 # ─────────────────────── MusicBrainz text search ──────────────────────
 
 

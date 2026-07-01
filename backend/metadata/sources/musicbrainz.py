@@ -73,6 +73,9 @@ async def fetch_release_artist_aliases(
                     )
     except Exception:
         logger.debug("MB alias fetch failed for release %s", release_id, exc_info=True)
+        # Don't cache a transient failure — a later resolve should retry
+        # instead of permanently losing cross-script matching for this release.
+        return [], []
 
     # De-dupe while preserving order.
     artist_aliases = list(dict.fromkeys(artist_aliases))
@@ -328,13 +331,7 @@ class MusicBrainzSource(MetadataSource):
                 candidates = []
 
                 for release in releases:
-                    artist = ""
-                    ac = release.get("artist-credit", [])
-                    if ac:
-                        artist = (
-                            ac[0].get("name", "")
-                            if isinstance(ac[0], dict) else str(ac[0])
-                        )
+                    artist = _join_artist_credit(release.get("artist-credit"))
 
                     media = [m for m in release.get("media", []) if _is_cd_medium(m)]
                     if not media:
@@ -424,10 +421,7 @@ class MusicBrainzSource(MetadataSource):
                 # Score releases first to pick top candidates worth fetching tracks for
                 scored: list[tuple[int, dict, dict]] = []
                 for r in releases:
-                    r_artist = ""
-                    ac = r.get("artist-credit", [])
-                    if ac and isinstance(ac[0], dict):
-                        r_artist = ac[0].get("name", "")
+                    r_artist = _join_artist_credit(r.get("artist-credit"))
 
                     conf = 40
                     evidence: dict[str, Any] = {
@@ -462,10 +456,7 @@ class MusicBrainzSource(MetadataSource):
                 candidates = []
                 # Fetch full track listings for top 3 — cheap MB lookups, big quality gain
                 for conf, r, evidence in scored[:3]:
-                    r_artist = ""
-                    ac = r.get("artist-credit", [])
-                    if ac and isinstance(ac[0], dict):
-                        r_artist = ac[0].get("name", "")
+                    r_artist = _join_artist_credit(r.get("artist-credit"))
 
                     tracks, disc_number, total_discs = await self._fetch_tracks(
                         client, r.get("id", ""), target_disc, track_count,
@@ -492,10 +483,7 @@ class MusicBrainzSource(MetadataSource):
 
                 # Append remaining lower-ranked releases without track fetches
                 for conf, r, evidence in scored[3:]:
-                    r_artist = ""
-                    ac = r.get("artist-credit", [])
-                    if ac and isinstance(ac[0], dict):
-                        r_artist = ac[0].get("name", "")
+                    r_artist = _join_artist_credit(r.get("artist-credit"))
                     candidates.append({
                         "artist": r_artist,
                         "album": r.get("title", ""),

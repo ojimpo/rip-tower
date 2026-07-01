@@ -529,6 +529,71 @@ async def test_va_track_artists_yield_compilation(monkeypatch, async_session_mak
     assert [t.title for t in tracks] == ["T1", "T2", "T3"]
 
 
+# ───────────────── contradiction detection (normalized comparison) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_contradiction_ignores_cosmetic_variants(monkeypatch, async_session_maker):
+    """Case/width variants of the same name must not fake a contradiction."""
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-var", drive_id="d", disc_id="dx"))
+        s.add(Track(job_id="job-var", track_num=1, title="t"))
+        s.add(MetadataCandidate(
+            job_id="job-var", source="musicbrainz",
+            artist="Amy Winehouse", album="Back to Black", confidence=90,
+            track_titles=json.dumps(["t"], ensure_ascii=False),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-var", source="cddb",
+            artist="AMY WINEHOUSE", album="ＢＡＣＫ ＴＯ ＢＬＡＣＫ", confidence=60,
+            track_titles=json.dumps(["t"], ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-var")
+    issues = json.loads(result.issues or "[]")
+    assert "artist_contradiction" not in issues
+    assert "album_contradiction" not in issues
+
+
+@pytest.mark.asyncio
+async def test_contradiction_flags_real_disagreement(monkeypatch, async_session_maker):
+    from backend.models import Job, MetadataCandidate, Track
+    monkeypatch.setattr(sanitizer, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-con", drive_id="d", disc_id="dx"))
+        s.add(Track(job_id="job-con", track_num=1, title="t"))
+        s.add(MetadataCandidate(
+            job_id="job-con", source="musicbrainz",
+            artist="Amy Winehouse", album="Back to Black", confidence=90,
+            track_titles=json.dumps(["t"], ensure_ascii=False),
+        ))
+        s.add(MetadataCandidate(
+            job_id="job-con", source="cddb",
+            artist="平沢進", album="救済の技法", confidence=60,
+            track_titles=json.dumps(["t"], ensure_ascii=False),
+        ))
+        await s.commit()
+
+    result = await sanitizer.sanitize_candidates("job-con")
+    issues = json.loads(result.issues or "[]")
+    assert "artist_contradiction" in issues
+    assert "album_contradiction" in issues
+
+
+def test_pick_best_tolerates_null_titles():
+    """A null entry in a source's track_titles must not crash scoring."""
+    c = _make_candidate("itunes", 50, None)
+    c.track_titles = json.dumps([None, "ok", "also ok"])
+    result = sanitizer._pick_best_track_titles([c], expected_count=3)
+    assert result is not None
+    assert result["titles"] == ["", "ok", "also ok"]
+
+
 # ───────────────── genre selection (no scavenging from mis-matches) ─────────────────
 
 

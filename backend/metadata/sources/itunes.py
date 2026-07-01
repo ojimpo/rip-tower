@@ -41,7 +41,9 @@ class ItunesSource(MetadataSource):
 
         term = " ".join(parts)
         track_count = identity.track_count if identity else 0
-        target_disc = (hints.get("disc_number") if hints else None) or 1
+        # None when the caller gave no disc hint — then track-count matching
+        # decides the disc instead of silently defaulting to disc 1.
+        hinted_disc = hints.get("disc_number")
 
         await asyncio.sleep(RATE_LIMIT)
         async with httpx.AsyncClient(timeout=10) as client:
@@ -75,11 +77,13 @@ class ItunesSource(MetadataSource):
                 if not collection_id:
                     continue
 
-                tracks = await self._lookup_tracks(
-                    client, collection_id, target_disc, track_count
+                tracks, disc_number, total_discs = await self._lookup_tracks(
+                    client, collection_id, hinted_disc, track_count
                 )
                 candidates.append(
-                    self._build_candidate(r, tracks, track_count, target_disc)
+                    self._build_candidate(
+                        r, tracks, track_count, disc_number, total_discs
+                    )
                 )
 
             return candidates
@@ -88,10 +92,16 @@ class ItunesSource(MetadataSource):
         self,
         client: httpx.AsyncClient,
         collection_id: int,
-        target_disc: int,
+        hinted_disc: int | None,
         track_count: int,
-    ) -> list[str]:
-        """Fetch track listing for an iTunes collection, filtered to target disc."""
+    ) -> tuple[list[str], int, int]:
+        """Fetch track listing for an iTunes collection.
+
+        Returns (titles, chosen_disc, total_discs). An explicit disc hint wins;
+        otherwise the disc whose track count matches the physical disc is
+        chosen, so ripping disc 2 of a set without a hint doesn't silently get
+        disc 1's titles.
+        """
         await asyncio.sleep(RATE_LIMIT)
         try:
             resp = await client.get(f"{ITUNES_BASE}/lookup", params={
@@ -101,11 +111,11 @@ class ItunesSource(MetadataSource):
                 "limit": LOOKUP_LIMIT,
             })
             if resp.status_code != 200:
-                return []
+                return [], 1, 1
             data = resp.json()
         except Exception:
             logger.exception("iTunes lookup failed for id=%s", collection_id)
-            return []
+            return [], 1, 1
 
         # Group tracks by disc number, sort by track number
         by_disc: dict[int, list[tuple[int, str]]] = {}
@@ -118,31 +128,32 @@ class ItunesSource(MetadataSource):
             if title:
                 by_disc.setdefault(disc, []).append((tnum, title))
 
-        # Prefer requested disc; fall back to disc 1; fall back to single-disc collection
+        if not by_disc:
+            return [], 1, 1
+        total_discs = len(by_disc)
+
+        # Explicit hint → track-count match → first disc
         chosen_disc = None
-        if target_disc in by_disc:
-            chosen_disc = target_disc
-        elif track_count and len(by_disc) > 1:
-            # Pick disc whose track count matches the actual disc being ripped
-            for d, items in by_disc.items():
-                if len(items) == track_count:
+        if hinted_disc is not None and hinted_disc in by_disc:
+            chosen_disc = hinted_disc
+        if chosen_disc is None and track_count:
+            for d in sorted(by_disc):
+                if len(by_disc[d]) == track_count:
                     chosen_disc = d
                     break
-        if chosen_disc is None and by_disc:
-            chosen_disc = sorted(by_disc.keys())[0]
-
         if chosen_disc is None:
-            return []
+            chosen_disc = sorted(by_disc)[0]
 
         tracks = sorted(by_disc[chosen_disc], key=lambda x: x[0])
-        return [title for _, title in tracks]
+        return [title for _, title in tracks], chosen_disc, total_discs
 
     def _build_candidate(
         self,
         collection: dict,
         tracks: list[str],
         track_count: int,
-        target_disc: int,
+        disc_number: int,
+        total_discs: int,
     ) -> dict:
         artist = collection.get("artistName", "")
         album = collection.get("collectionName", "")
@@ -164,7 +175,8 @@ class ItunesSource(MetadataSource):
             "itunes_id": collection.get("collectionId", ""),
             "artwork_url": artwork_url,
             "match": "search",
-            "disc_number": target_disc,
+            "disc_number": disc_number,
+            "total_discs": total_discs,
         }
         if collection.get("collectionExplicitness"):
             evidence["explicitness"] = collection["collectionExplicitness"]

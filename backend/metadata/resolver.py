@@ -6,11 +6,12 @@ Ported from ~/dev/openclaw-cd-rip/scripts/metadata_resolver.py.
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import select
 
 from backend.database import async_session
+from backend.metadata.evidence import parse_evidence
 from backend.models import JobMetadata, MetadataCandidate
 from backend.services.websocket import broadcast
 
@@ -71,27 +72,21 @@ async def resolve(
         await session.commit()
 
     # ---- Phase 1: disc-ID-based sources ----
-    phase1_tasks = [
-        asyncio.create_task(_query_source(source, job_id, identity, hints))
+    # _query_source never raises (it logs failures per source), so a broken
+    # source can't take down its siblings.
+    await asyncio.gather(*(
+        _query_source(source, job_id, identity, hints)
         for source in phase1_sources
-    ]
-    phase1_results = await asyncio.gather(*phase1_tasks, return_exceptions=True)
-    for source, result in zip(phase1_sources, phase1_results):
-        if isinstance(result, Exception):
-            logger.warning("Phase 1 source %s failed: %s", source.name, result)
+    ))
 
     # Build enriched hints from Phase 1 candidates
     enriched_hints = await _enrich_hints(job_id, hints)
 
     # ---- Phase 2: text-search-based sources, using enriched hints ----
-    phase2_tasks = [
-        asyncio.create_task(_query_source(source, job_id, identity, enriched_hints))
+    await asyncio.gather(*(
+        _query_source(source, job_id, identity, enriched_hints)
         for source in phase2_sources
-    ]
-    phase2_results = await asyncio.gather(*phase2_tasks, return_exceptions=True)
-    for source, result in zip(phase2_sources, phase2_results):
-        if isinstance(result, Exception):
-            logger.warning("Phase 2 source %s failed: %s", source.name, result)
+    ))
 
     # Reject fuzzy TOC matches whose per-track durations disagree with the
     # physical disc. MB's /discid/-?toc= matches loosely and can return an
@@ -205,7 +200,6 @@ async def _query_source(source, job_id: str, identity, hints: dict | None) -> No
             await session.commit()
     except Exception:
         logger.exception("Source %s query failed", source.name)
-        raise
 
 
 async def _apply_forced(job_id: str, force: dict) -> None:
@@ -320,12 +314,7 @@ async def _penalize_toc_length_mismatch(job_id: str, identity: Any) -> None:
 
         changed = False
         for c in candidates:
-            if not c.evidence:
-                continue
-            try:
-                evidence = json.loads(c.evidence)
-            except (json.JSONDecodeError, TypeError):
-                continue
+            evidence = parse_evidence(c)
             cand_secs = evidence.get("track_lengths")
             # Need a full, non-placeholder length array of the same shape as the
             # disc. MB occasionally omits lengths (all zeros) — can't judge those.
@@ -433,12 +422,7 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
             boosted_ids.add(c.id)
             old_conf = c.confidence or 0
             c.confidence = min(old_conf + _KASHIDASHI_BOOST, 100)
-            evidence: dict = {}
-            if c.evidence:
-                try:
-                    evidence = json.loads(c.evidence)
-                except (json.JSONDecodeError, TypeError):
-                    evidence = {}
+            evidence = parse_evidence(c)
             evidence["kashidashi_confirmed"] = {
                 "item_id": item.get("id"),
                 "artist_sim": round(art_sim, 2),
@@ -468,12 +452,7 @@ async def _boost_kashidashi_matches(job_id: str) -> None:
                 if old_conf <= _KASHIDASHI_CONFLICT_FLOOR:
                     continue
                 c.confidence = _KASHIDASHI_CONFLICT_FLOOR
-                evidence = {}
-                if c.evidence:
-                    try:
-                        evidence = json.loads(c.evidence)
-                    except (json.JSONDecodeError, TypeError):
-                        evidence = {}
+                evidence = parse_evidence(c)
                 evidence["kashidashi_conflict"] = {
                     "previous_confidence": old_conf,
                     "floor": _KASHIDASHI_CONFLICT_FLOOR,

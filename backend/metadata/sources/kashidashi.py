@@ -16,6 +16,7 @@ import httpx
 
 from backend.config import get_config
 from backend.database import async_session
+from backend.metadata.evidence import parse_evidence
 from backend.metadata.normalize import norm, similarity
 from backend.metadata.sources.base import MetadataSource
 from backend.models import KashidashiCandidate, JobMetadata
@@ -34,17 +35,7 @@ class KashidashiSource(MetadataSource):
         if not base_url:
             return []
 
-        async with httpx.AsyncClient(timeout=8) as client:
-            try:
-                resp = await client.get(f"{base_url}/api/items", params={
-                    "type": "cd", "status": "not_ripped",
-                })
-                if resp.status_code != 200:
-                    return []
-                items = resp.json()
-            except Exception:
-                logger.exception("Kashidashi API error")
-                return []
+        items = await fetch_active_borrowed_items()
 
         disc_id = identity.disc_id if identity else None
         track_count = identity.track_count if identity else 0
@@ -54,9 +45,6 @@ class KashidashiSource(MetadataSource):
 
         candidates = []
         for it in items:
-            if it.get("returned_at") or it.get("ripped_at"):
-                continue
-
             # Exact disc ID match — highest confidence
             if disc_id and it.get("rip_discid") and disc_id == it["rip_discid"]:
                 candidates.append({
@@ -96,8 +84,7 @@ class KashidashiSource(MetadataSource):
                     break
 
             # Track count match
-            item_tc = it.get("metadata_track_count")
-            if item_tc and track_count and int(item_tc) == int(track_count):
+            if _track_count_matches(it, track_count):
                 score += 3
                 evidence["track_count_match"] = True
 
@@ -108,15 +95,10 @@ class KashidashiSource(MetadataSource):
                 evidence["catalog_match"] = True
 
             # Recency bonus
-            bd = it.get("borrowed_date", "")
-            if bd:
-                try:
-                    days = (datetime.now() - datetime.strptime(bd, "%Y-%m-%d")).days
-                    if days <= 14:
-                        score += 1
-                        evidence["recent_days"] = days
-                except ValueError:
-                    pass
+            days = _days_since_borrow(it)
+            if days is not None and 0 <= days <= 14:
+                score += 1
+                evidence["recent_days"] = days
 
             # Require at least one real signal (artist/album/track_count/catalog).
             # Recency alone (score 1) is not evidence that this disc is that item —
@@ -145,6 +127,31 @@ class KashidashiSource(MetadataSource):
 
 
 _FALLBACK_WINDOW_DAYS = 7
+
+
+def _track_count_matches(item: dict, track_count: int) -> bool:
+    """Whether the item's recorded track count equals the disc's.
+
+    kashidashi's metadata_track_count is free-form user input — a non-numeric
+    value must not blow up the whole source with a ValueError.
+    """
+    raw = item.get("metadata_track_count")
+    if not raw or not track_count:
+        return False
+    try:
+        return int(raw) == int(track_count)
+    except (TypeError, ValueError):
+        return False
+
+
+def _days_since_borrow(item: dict) -> int | None:
+    """Days since the item's borrowed_date (UTC), or None when unparseable."""
+    bd = item.get("borrowed_date") or ""
+    try:
+        borrowed = datetime.strptime(bd, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc).date() - borrowed).days
 
 
 async def fetch_active_borrowed_items() -> list[dict]:
@@ -210,13 +217,9 @@ _ALIAS_SIM_THRESHOLD = 0.6
 
 def _mb_release_id(candidate: Any) -> str | None:
     """The MusicBrainz release id a candidate points at, if any."""
-    if candidate.evidence:
-        try:
-            ev = json.loads(candidate.evidence)
-            if isinstance(ev, dict) and ev.get("mb_release"):
-                return ev["mb_release"]
-        except (json.JSONDecodeError, TypeError):
-            pass
+    ev = parse_evidence(candidate)
+    if ev.get("mb_release"):
+        return ev["mb_release"]
     url = candidate.source_url or ""
     if "musicbrainz.org/release/" in url:
         return url.rstrip("/").split("/")[-1]
@@ -229,13 +232,7 @@ def _is_disc_anchored(candidate: Any) -> bool:
     Then the album identity is proven by the disc itself, so the kashidashi
     cross-check only needs to confirm the *artist* to decide a TOC collision.
     """
-    if not candidate.evidence:
-        return False
-    try:
-        ev = json.loads(candidate.evidence)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return isinstance(ev, dict) and ev.get("match") in ("toc_submission", "exact_discid")
+    return parse_evidence(candidate).get("match") in ("toc_submission", "exact_discid")
 
 
 async def best_kashidashi_match(
@@ -310,7 +307,6 @@ def _recency_fallback_candidates(
     when they borrowed five at once, we can't tell which is which, so each
     candidate is low-confidence and review will surface them all.
     """
-    today = datetime.now(timezone.utc).date()
     eligible: list[tuple[int, dict]] = []
     for it in items:
         if it.get("returned_at") or it.get("ripped_at"):
@@ -318,13 +314,8 @@ def _recency_fallback_candidates(
         if not (it.get("artist") or it.get("title")
                 or it.get("metadata_artist") or it.get("metadata_album")):
             continue
-        bd_str = it.get("borrowed_date") or ""
-        try:
-            bd = datetime.strptime(bd_str, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        days = (today - bd).days
-        if days < 0 or days > _FALLBACK_WINDOW_DAYS:
+        days = _days_since_borrow(it)
+        if days is None or days < 0 or days > _FALLBACK_WINDOW_DAYS:
             continue
         eligible.append((days, it))
 
@@ -341,8 +332,7 @@ def _recency_fallback_candidates(
     out: list[dict] = []
     for days, it in eligible:
         c = base
-        item_tc = it.get("metadata_track_count")
-        if item_tc and track_count and int(item_tc) == int(track_count):
+        if _track_count_matches(it, track_count):
             c += 5
         if days == 0:
             c += 5
@@ -443,12 +433,12 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
             score += 1  # partial artist match when album already matched
 
         # Track count bonus
-        item_tc = it.get("metadata_track_count")
-        if item_tc and track_count and int(item_tc) == int(track_count):
+        tc_match = _track_count_matches(it, track_count)
+        if tc_match:
             score += 3
 
         # Strong album match + track count = likely correct even with different artist name format
-        if best_album_sim >= 0.7 and item_tc and track_count and int(item_tc) == int(track_count):
+        if best_album_sim >= 0.7 and tc_match:
             score += 2
 
         if score > 0:
@@ -479,7 +469,9 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
                 title=it.get("metadata_album") or it.get("title", ""),
                 artist=it.get("metadata_artist") or it.get("artist", ""),
                 score=float(score),
-                match_type="exact_discid" if score >= 7 else "fuzzy",
+                # Score-based labels: this matcher works on text similarity, so
+                # even a high score is "strong", never a proven disc-ID match.
+                match_type="strong" if score >= 7 else "fuzzy",
                 matched=is_unique_match and score == top_score,
             )
             session.add(candidate)

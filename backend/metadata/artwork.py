@@ -48,7 +48,7 @@ async def fetch_artwork(job_id: str) -> None:
     album = meta.album or ""
 
     # Also check candidates for iTunes artwork URLs in evidence
-    itunes_artwork_url = await _find_itunes_artwork_url(job_id)
+    itunes_artwork_url = await _find_itunes_artwork_url(job_id, artist, album)
 
     tasks = [
         _fetch_cover_art_archive(job_id, meta.source_url),
@@ -132,8 +132,16 @@ async def refresh_artwork_for_edit(job_id: str) -> None:
         await copy_from_group_sibling(sid)
 
 
-async def _find_itunes_artwork_url(job_id: str) -> str | None:
-    """Check iTunes candidates for pre-found artwork URLs."""
+async def _find_itunes_artwork_url(
+    job_id: str, artist: str, album: str
+) -> str | None:
+    """Check iTunes candidates for pre-found artwork URLs.
+
+    Only a candidate that actually matches the resolved artist/album may
+    donate its artwork URL — the first iTunes hit is often a different album
+    (the resolver keeps low-confidence candidates around for review), and
+    blindly reusing its URL attached the wrong cover to the release.
+    """
     from sqlalchemy import select
 
     async with async_session() as session:
@@ -143,14 +151,18 @@ async def _find_itunes_artwork_url(job_id: str) -> str | None:
             .where(MetadataCandidate.source == "itunes")
         )
         for candidate in result.scalars():
-            if candidate.evidence:
-                try:
-                    ev = json.loads(candidate.evidence)
-                    url = ev.get("artwork_url")
-                    if url:
-                        return url
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            if not candidate.evidence:
+                continue
+            if (similarity(artist, candidate.artist or "") < 0.85
+                    or similarity(album, candidate.album or "") < 0.85):
+                continue
+            try:
+                ev = json.loads(candidate.evidence)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            url = ev.get("artwork_url")
+            if url:
+                return url
     return None
 
 
