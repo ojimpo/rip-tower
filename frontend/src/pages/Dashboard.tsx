@@ -4,13 +4,41 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useWebSocket } from "../hooks/useWebSocket";
 import TrackProgress from "../components/TrackProgress";
-import type { Drive, JobSummary, WsEvent } from "../lib/types";
+import type { Drive, DriveHealth, JobSummary, WsEvent } from "../lib/types";
 
 const SOURCE_TYPES = [
   { value: "library", label: "\u56F3\u66F8\u9928" },
   { value: "owned", label: "\u624B\u6301\u3061" },
   { value: "unknown", label: "\u672A\u5206\u985E" },
 ] as const;
+
+/** Badge for a drive that has stopped reading discs cleanly.
+ *
+ * Only surfaced when there is something to act on — a healthy drive (or one
+ * we haven't seen enough discs from) shows nothing, so the badge appearing
+ * is itself the signal. A drive that needs retries and fallbacks is also the
+ * kind that leaves concentric scratches, so this is worth noticing before a
+ * borrowed CD goes in. */
+function driveHealthBadge(health: DriveHealth | undefined) {
+  if (!health || health.status === "healthy" || health.status === "unknown") return null;
+
+  const failing = health.status === "failing";
+  const pct = health.clean_rate === null ? "?" : Math.round(health.clean_rate * 100);
+  const detail =
+    `直近${health.window_days}日: ${health.tracks}曲中 ${health.clean}曲が一発読み取り成功 (${pct}%)\n` +
+    `リトライ/フォールバック ${health.degraded}曲 · 読めず ${health.failed}曲 · タイムアウト ${health.timeouts}回`;
+
+  return (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+        failing ? "bg-red-500/15 text-red-300" : "bg-amber-400/15 text-amber-300"
+      }`}
+      title={detail}
+    >
+      {failing ? "読み取り不良" : "調子低下"}
+    </span>
+  );
+}
 
 function statusColor(status: string): { bg: string; text: string; gradient: string } {
   switch (status) {
@@ -552,6 +580,7 @@ export default function Dashboard() {
                               取り込み済み
                             </span>
                           )}
+                          {driveHealthBadge(drive.health)}
                         </div>
                         {drive.disc_info ? (
                           <p className="text-xs text-gray-400 truncate mt-0.5">

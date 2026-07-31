@@ -14,18 +14,46 @@ Ported from ~/dev/openclaw-cd-rip/scripts/ripper.py.
 import asyncio
 import logging
 import shutil
+import time
 from pathlib import Path
 
 from sqlalchemy import select
 
 from backend.config import get_config
 from backend.database import async_session
-from backend.models import Drive, Track
+from backend.models import Drive, RipAttempt, Track
 from backend.services.websocket import broadcast
 
 logger = logging.getLogger(__name__)
 
 PER_TRACK_TIMEOUT = 600  # seconds
+
+
+async def _record_attempt(
+    drive_id: str | None,
+    job_id: str,
+    track_num: int,
+    attempt: int,
+    tool: str,
+    outcome: str,
+    started: float,
+) -> None:
+    """Log one rip attempt for drive health reporting (best-effort)."""
+    try:
+        async with async_session() as session:
+            session.add(RipAttempt(
+                drive_id=drive_id,
+                job_id=job_id,
+                track_num=track_num,
+                attempt=attempt,
+                tool=tool,
+                outcome=outcome,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ))
+            await session.commit()
+    except Exception:
+        # Diagnostics must never be able to fail a rip.
+        logger.exception("Failed to record rip attempt for job %s", job_id)
 
 
 async def rip_disc(job_id: str, drive_id: str, identity) -> None:
@@ -56,7 +84,9 @@ async def rip_disc(job_id: str, drive_id: str, identity) -> None:
             if not drive or not drive.current_path:
                 raise RuntimeError(f"Drive {drive_id} not connected")
             dev_path = drive.current_path
-        await _rip_track(job_id, track.track_num, dev_path, output_dir, total)
+        await _rip_track(
+            job_id, track.track_num, dev_path, output_dir, total, drive_id,
+        )
 
 
 async def _rip_track(
@@ -65,6 +95,7 @@ async def _rip_track(
     dev_path: str,
     output_dir: Path,
     total_tracks: int,
+    drive_id: str | None = None,
 ) -> None:
     """Rip a single track with retry and fallback.
 
@@ -122,6 +153,7 @@ async def _rip_track(
 
         from backend.services.pipeline import spawn_tracked, unregister_proc
 
+        started = time.monotonic()
         try:
             proc = await spawn_tracked(
                 job_id, *cmd,
@@ -139,6 +171,10 @@ async def _rip_track(
                 except ProcessLookupError:
                     pass
                 wav_path.unlink(missing_ok=True)
+                await _record_attempt(
+                    drive_id, job_id, track_num, attempt, tool_name,
+                    "timeout", started,
+                )
                 continue
             finally:
                 unregister_proc(job_id, proc)
@@ -148,6 +184,9 @@ async def _rip_track(
                 status = "ok" if attempt == 1 else "ok_degraded"
                 logger.info("Track %d: %s (%s)", track_num, status, tool_name)
                 success = True
+                await _record_attempt(
+                    drive_id, job_id, track_num, attempt, tool_name, "ok", started,
+                )
                 break
 
             logger.warning(
@@ -155,10 +194,16 @@ async def _rip_track(
                 track_num, attempt, stderr.decode("utf-8", "replace").strip()[:200],
             )
             wav_path.unlink(missing_ok=True)
+            await _record_attempt(
+                drive_id, job_id, track_num, attempt, tool_name, "error", started,
+            )
 
         except Exception as e:
             logger.warning("Track %d attempt %d error: %s", track_num, attempt, e)
             wav_path.unlink(missing_ok=True)
+            await _record_attempt(
+                drive_id, job_id, track_num, attempt, tool_name, "error", started,
+            )
 
     # Update track status
     async with async_session() as session:

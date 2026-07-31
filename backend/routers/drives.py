@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -10,10 +10,76 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_session
-from backend.models import Drive
+from backend.models import Drive, RipAttempt
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["drives"])
+
+# Drive health is judged on how often a track came off cleanly on the first
+# cd-paranoia pass. A drive going bad starts needing the degraded retry or the
+# cdda2wav fallback long before it fails outright, so "clean first pass" is the
+# signal that moves first.
+HEALTH_WINDOW_DAYS = 90
+HEALTH_MIN_SAMPLES = 10
+HEALTH_HEALTHY_RATE = 0.95
+HEALTH_DEGRADING_RATE = 0.80
+
+
+async def _drive_health(session: AsyncSession, drive_id: str) -> dict:
+    """Summarise recent rip attempts for one drive.
+
+    status:
+      unknown    — not enough tracks ripped recently to judge
+      healthy    — nearly everything came off on the first pass
+      degrading  — retries/fallbacks are becoming common
+      failing    — a large share of tracks needs help or doesn't read at all
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=HEALTH_WINDOW_DAYS)
+    attempts = (await session.execute(
+        select(RipAttempt)
+        .where(RipAttempt.drive_id == drive_id)
+        .where(RipAttempt.created_at >= cutoff)
+    )).scalars().all()
+
+    by_track: dict[tuple, list] = {}
+    for a in attempts:
+        by_track.setdefault((a.job_id, a.track_num), []).append(a)
+
+    clean = degraded = failed = 0
+    timeouts = 0
+    for rows in by_track.values():
+        rows.sort(key=lambda r: r.attempt)
+        timeouts += sum(1 for r in rows if r.outcome == "timeout")
+        ok = [r for r in rows if r.outcome == "ok"]
+        if not ok:
+            failed += 1
+        elif ok[0].attempt == 1:
+            clean += 1
+        else:
+            degraded += 1
+
+    tracks = len(by_track)
+    clean_rate = clean / tracks if tracks else None
+
+    if tracks < HEALTH_MIN_SAMPLES:
+        status = "unknown"
+    elif clean_rate >= HEALTH_HEALTHY_RATE:
+        status = "healthy"
+    elif clean_rate >= HEALTH_DEGRADING_RATE:
+        status = "degrading"
+    else:
+        status = "failing"
+
+    return {
+        "status": status,
+        "tracks": tracks,
+        "clean": clean,
+        "degraded": degraded,
+        "failed": failed,
+        "timeouts": timeouts,
+        "clean_rate": round(clean_rate, 3) if clean_rate is not None else None,
+        "window_days": HEALTH_WINDOW_DAYS,
+    }
 
 
 class DriveResponse(BaseModel):
@@ -167,8 +233,33 @@ async def list_drives(session: AsyncSession = Depends(get_session)):
             "auto_rip_source_type": drive.auto_rip_source_type,
             "active_job_id": active_job_for_drive.id if active_job_for_drive else None,
             "active_job_status": active_job_for_drive.status if active_job_for_drive else None,
+            "health": await _drive_health(session, drive.drive_id),
         })
 
+    return items
+
+
+@router.get("/drives/health")
+async def drives_health(session: AsyncSession = Depends(get_session)):
+    """Per-drive rip reliability, worst first.
+
+    Exists so a drive that is quietly chewing through discs can be spotted
+    before it ruins a borrowed CD.
+    """
+    result = await session.execute(select(Drive).order_by(Drive.created_at))
+    drives = result.scalars().all()
+
+    order = {"failing": 0, "degrading": 1, "unknown": 2, "healthy": 3}
+    items = [
+        {
+            "drive_id": d.drive_id,
+            "name": d.name,
+            "current_path": d.current_path,
+            **await _drive_health(session, d.drive_id),
+        }
+        for d in drives
+    ]
+    items.sort(key=lambda i: (order.get(i["status"], 9), i.get("clean_rate") or 0))
     return items
 
 

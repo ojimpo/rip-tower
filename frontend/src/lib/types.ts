@@ -18,6 +18,21 @@ export interface Drive {
   auto_rip_source_type: string;
   active_job_id: string | null;
   active_job_status: string | null;
+  health?: DriveHealth;
+}
+
+export interface DriveHealth {
+  /** unknown = too few recent tracks to judge */
+  status: "unknown" | "healthy" | "degrading" | "failing";
+  tracks: number;
+  /** tracks that came off cleanly on the first cd-paranoia pass */
+  clean: number;
+  /** succeeded, but only via a retry or the cdda2wav fallback */
+  degraded: number;
+  failed: number;
+  timeouts: number;
+  clean_rate: number | null;
+  window_days: number;
 }
 
 export interface Job {

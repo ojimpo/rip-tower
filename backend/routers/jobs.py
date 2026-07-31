@@ -735,13 +735,22 @@ async def re_rip(
 async def re_rip_failed(
     job_id: str,
     drive_id: Optional[str] = None,
+    include_degraded: bool = False,
     session: AsyncSession = Depends(get_session),
 ):
-    """Re-rip only failed tracks. drive_id may be passed to retry on a
-    different drive when the disc has been physically moved."""
+    """Re-rip tracks that didn't come off the disc cleanly.
+
+    drive_id may be passed to retry on a different drive when the disc has
+    been physically moved. include_degraded also picks up `ok_degraded`
+    tracks — those succeeded only on a retry or on the cdda2wav fallback
+    (no paranoia error correction), so they are exactly what you want to
+    redo after moving the disc to a healthier drive.
+    """
+    wanted = ["failed", "ok_degraded"] if include_degraded else ["failed"]
     failed = await session.execute(
         select(Track)
-        .where(Track.job_id == job_id, Track.rip_status == "failed")
+        .where(Track.job_id == job_id, Track.rip_status.in_(wanted))
+        .order_by(Track.track_num)
     )
     track_nums = [t.track_num for t in failed.scalars()]
     if not track_nums:
@@ -750,12 +759,14 @@ async def re_rip_failed(
     from backend.services.pipeline import run_re_rip_track, register_task
     import asyncio
 
-    # Register only the first task — the others share the same job_id and the
-    # last-write-wins behavior is fine since abort is meant for runaway jobs.
-    for i, num in enumerate(track_nums):
-        task = asyncio.create_task(run_re_rip_track(job_id, num, drive_id))
-        if i == 0:
-            register_task(job_id, task)
+    async def _run_sequentially() -> None:
+        # One task, one track at a time. The device lock already serialises the
+        # ripping itself, but each run also encodes and moves files into the
+        # library — firing these concurrently raced on the same job's files.
+        for num in track_nums:
+            await run_re_rip_track(job_id, num, drive_id)
+
+    register_task(job_id, asyncio.create_task(_run_sequentially()))
 
     return {"status": "re-ripping", "tracks": track_nums, "drive_id": drive_id}
 

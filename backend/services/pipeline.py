@@ -6,6 +6,7 @@ and the pipeline manages transitions between states.
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy import select
@@ -520,6 +521,66 @@ async def run_resolve_only(job_id: str, hints: dict) -> None:
         await _update_status(job_id, "error", str(e))
 
 
+async def _verify_disc_matches(job_id: str, drive_id: str) -> None:
+    """Refuse to re-rip when the drive holds a different disc than the job.
+
+    Re-rip accepts an explicit drive_id precisely so a disc can be moved to a
+    healthier drive, which makes "wrong disc loaded in the target drive" a
+    realistic mistake rather than a hypothetical one. Without this check the
+    job's tracks are silently overwritten with audio from whatever disc
+    happened to be in the tray, and nothing downstream would notice.
+
+    Jobs with no recorded disc_id (identify failed, or an imported job) are
+    let through — there is nothing to compare against.
+    """
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        expected = job.disc_id if job else None
+    if not expected:
+        return
+
+    from backend.services.disc_identity import read_disc_identity_only
+
+    identity = await read_disc_identity_only(drive_id)
+    if identity.disc_id != expected:
+        raise RuntimeError(
+            f"Wrong disc in drive: job expects disc {expected} but the drive "
+            f"holds {identity.disc_id}. Load the correct disc and retry."
+        )
+
+
+async def _reflect_re_rip_into_library(job_id: str) -> None:
+    """Move a completed job's freshly re-encoded tracks into its output dir.
+
+    A re-rip on a `complete` job encodes into the incoming dir, but nothing
+    was pulling those files into the library, so the job reported success
+    while the library kept the old (often degraded) audio. reapply_metadata
+    already knows how to tag, name and move a track from its encoded_path, so
+    reuse it, then drop the WAVs the finalizer would normally have cleaned up.
+    """
+    async with async_session() as session:
+        job = await session.get(Job, job_id)
+        if not job or job.status != "complete" or not job.output_dir:
+            return
+
+    from backend.services.finalizer import reapply_metadata
+
+    await reapply_metadata(job_id)
+
+    from backend.config import get_config
+
+    incoming = Path(get_config().output.incoming_dir) / job_id
+    if incoming.is_dir():
+        for wav in incoming.glob("*.wav"):
+            wav.unlink(missing_ok=True)
+        try:
+            incoming.rmdir()
+        except OSError:
+            pass  # other artifacts still present — leave it alone
+
+    logger.info("Re-ripped tracks reflected into library for job %s", job_id)
+
+
 async def run_re_rip(job_id: str, drive_id: str | None = None) -> None:
     """Re-rip all tracks of a job."""
     try:
@@ -554,10 +615,21 @@ async def run_re_rip(job_id: str, drive_id: str | None = None) -> None:
                     t.encode_status = "pending"
                 await session.commit()
 
-            # 6. Read disc identity (without creating new tracks)
+            # 6. Read disc identity (without creating new tracks), and refuse
+            #    to proceed if it isn't the disc this job was ripped from.
             from backend.services.disc_identity import read_disc_identity_only
 
             identity = await read_disc_identity_only(effective_drive_id)
+
+            async with async_session() as session:
+                j = await session.get(Job, job_id)
+                expected = j.disc_id if j else None
+            if expected and identity.disc_id != expected:
+                raise RuntimeError(
+                    f"Wrong disc in drive: job expects disc {expected} but the "
+                    f"drive holds {identity.disc_id}. Load the correct disc "
+                    f"and retry."
+                )
 
             # 7. Rip all tracks
             await _run_rip(job_id, effective_drive_id, identity)
@@ -629,18 +701,37 @@ async def run_re_rip_track(
         # 4. Rip just that track
         lock = _get_device_lock(effective_drive_id)
         async with lock:
+            await _verify_disc_matches(job_id, effective_drive_id)
+
+            # Re-read the dev node after waiting on the lock — a USB
+            # re-enumeration in the meantime would leave the path above stale.
+            async with async_session() as session:
+                drive = await session.get(Drive, effective_drive_id)
+                if not drive or not drive.current_path:
+                    raise RuntimeError(
+                        f"Drive {effective_drive_id} not connected"
+                    )
+                dev_path = drive.current_path
+
             config = get_config()
             output_dir = Path(config.output.incoming_dir) / job_id
             output_dir.mkdir(parents=True, exist_ok=True)
 
             from backend.services.ripper import _rip_track
 
-            await _rip_track(job_id, track_num, dev_path, output_dir, total_tracks)
+            await _rip_track(
+                job_id, track_num, dev_path, output_dir, total_tracks,
+                effective_drive_id,
+            )
 
         # 5. Encode just that track
         from backend.services.encoder import encode_all
 
         await encode_all(job_id)
+
+        # 5b. A complete job already has its files in the library; push the
+        # re-encoded track in there too, or the re-rip is a no-op to the user.
+        await _reflect_re_rip_into_library(job_id)
 
         # 6. If no tracks remain in failed state, push the job back through
         # approval. Without this, an error-state job whose failed track was

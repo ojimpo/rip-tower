@@ -149,6 +149,29 @@ class Track(Base):
     job: Mapped["Job"] = relationship(back_populates="tracks")
 
 
+class RipAttempt(Base):
+    """One cd-paranoia/cdda2wav invocation, kept for drive health reporting.
+
+    A drive that is wearing out doesn't fail outright — it starts needing the
+    degraded fallback, then starts timing out, long before it refuses a disc.
+    Recording every attempt (not just the final per-track outcome) is what
+    makes that trend visible while the drive still looks like it works.
+    """
+
+    __tablename__ = "rip_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    drive_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    track_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    tool: Mapped[str] = mapped_column(Text, nullable=False)
+    # ok | timeout | error — "ok" on attempt > 1 is a degraded success
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class MetadataCandidate(Base):
     __tablename__ = "metadata_candidates"
 
