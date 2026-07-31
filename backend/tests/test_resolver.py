@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -746,3 +747,181 @@ async def test_boost_does_not_penalize_without_borrowed_candidate(
         )).scalars().first()
 
     assert c.confidence == 90  # no borrowed candidate surfaced → untouched
+
+
+# ── Disc numbering when joining an album group ──────────────────────────────
+
+
+def _disc_job(job_id: str, created_at, *, disc: int, total: int, group=None):
+    """A resolved disc of ゆずイロハ, with its selected candidate's evidence."""
+    return [
+        Job(id=job_id, drive_id=job_id, disc_id=job_id, created_at=created_at,
+            album_group=group),
+        JobMetadata(
+            job_id=job_id,
+            artist="ゆず",
+            album="ゆずイロハ 1997-2017",
+            album_base="ゆずイロハ 1997-2017",
+            disc_number=disc,
+            total_discs=total,
+            confidence=100,
+            source="musicbrainz",
+        ),
+        MetadataCandidate(
+            job_id=job_id,
+            source="musicbrainz",
+            artist="ゆず",
+            album="ゆずイロハ 1997-2017",
+            confidence=100,
+            selected=True,
+            evidence=json.dumps({"disc_number": disc, "total_discs": total}),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_join_group_keeps_source_backed_disc_number(
+    monkeypatch, async_session_maker,
+):
+    """A disc whose TOC match already identified it as disc 2 of 3 must keep
+    that number and count when it joins a group.
+
+    Regression: the sibling queries ran after `job.album_group` was assigned,
+    so autoflush made the joining job appear in its own sibling set. It was
+    counted twice (total_discs 3 -> 4) and collided with its own disc_number,
+    which bumped it into a free slot (disc 2 -> 4).
+    """
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+    monkeypatch.setattr(resolver, "broadcast", _noop_broadcast)
+
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    async with async_session_maker() as s:
+        for row in _disc_job("disc-1", t0, disc=1, total=3, group="grp-1"):
+            s.add(row)
+        for row in _disc_job("disc-3", t0 + timedelta(seconds=30), disc=3,
+                             total=3, group="grp-1"):
+            s.add(row)
+        for row in _disc_job("disc-2", t0 + timedelta(seconds=60), disc=2,
+                             total=3):
+            s.add(row)
+        await s.commit()
+
+    await resolver._auto_match_album_group("disc-2")
+
+    async with async_session_maker() as s:
+        j2 = await s.get(Job, "disc-2")
+        metas = {d: await s.get(JobMetadata, f"disc-{d}") for d in (1, 2, 3)}
+
+    assert j2.album_group == "grp-1"
+    assert metas[2].disc_number == 2, "source-backed disc number was overwritten"
+    assert [metas[d].total_discs for d in (1, 2, 3)] == [3, 3, 3]
+
+
+@pytest.mark.asyncio
+async def test_join_group_source_backed_disc_evicts_unbacked_squatter(
+    monkeypatch, async_session_maker,
+):
+    """When a guess is sitting on the slot a source-backed disc needs, the
+    guess moves — not the evidence."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+    monkeypatch.setattr(resolver, "broadcast", _noop_broadcast)
+
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    async with async_session_maker() as s:
+        # Incumbent claims disc 2 but has no evidence backing it.
+        s.add(Job(id="guess", drive_id="d1", disc_id="g", created_at=t0,
+                  album_group="grp-1"))
+        s.add(JobMetadata(
+            job_id="guess", artist="ゆず", album="ゆずイロハ 1997-2017",
+            album_base="ゆずイロハ 1997-2017", disc_number=2, total_discs=3,
+            confidence=50, source="llm",
+        ))
+        # Newcomer is TOC-confirmed as disc 2.
+        for row in _disc_job("backed", t0 + timedelta(seconds=60), disc=2,
+                             total=3):
+            s.add(row)
+        await s.commit()
+
+    await resolver._auto_match_album_group("backed")
+
+    async with async_session_maker() as s:
+        m_backed = await s.get(JobMetadata, "backed")
+        m_guess = await s.get(JobMetadata, "guess")
+
+    assert m_backed.disc_number == 2, "evidence should win the slot"
+    assert m_guess.disc_number != 2, "the unbacked guess should have moved"
+
+
+@pytest.mark.asyncio
+async def test_join_group_total_discs_ignores_bogus_extra_member(
+    monkeypatch, async_session_maker,
+):
+    """A mis-identified disc joining the group must not inflate total_discs.
+
+    This is how a 3-disc set was tagged as a 4-disc set: an unrelated CD was
+    hallucinated onto the same artist/album and counted as a fourth disc.
+    """
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+    monkeypatch.setattr(resolver, "broadcast", _noop_broadcast)
+
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    async with async_session_maker() as s:
+        for d in (1, 2, 3):
+            for row in _disc_job(f"disc-{d}", t0 + timedelta(seconds=d),
+                                 disc=d, total=3, group="grp-1"):
+                s.add(row)
+        # An unrelated CD mis-identified as this album, with no disc evidence.
+        s.add(Job(id="bogus", drive_id="d9", disc_id="b",
+                  created_at=t0 + timedelta(seconds=90)))
+        s.add(JobMetadata(
+            job_id="bogus", artist="ゆず", album="ゆずイロハ 1997-2017",
+            album_base="ゆずイロハ 1997-2017", disc_number=None, total_discs=1,
+            confidence=50, source="llm",
+        ))
+        await s.commit()
+
+    await resolver._auto_match_album_group("bogus")
+
+    async with async_session_maker() as s:
+        metas = {d: await s.get(JobMetadata, f"disc-{d}") for d in (1, 2, 3)}
+
+    assert [metas[d].disc_number for d in (1, 2, 3)] == [1, 2, 3]
+    assert [metas[d].total_discs for d in (1, 2, 3)] == [3, 3, 3], (
+        "group membership must not override the sources' disc count"
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_group_source_backed_discs_claim_their_own_slots(
+    monkeypatch, async_session_maker,
+):
+    """Forming a group from scratch must seat each disc at its evidenced
+    position, even when the later-created disc has the lower number."""
+    monkeypatch.setattr(resolver, "async_session", async_session_maker)
+    monkeypatch.setattr(resolver, "broadcast", _noop_broadcast)
+
+    t0 = datetime.now(timezone.utc) - timedelta(minutes=30)
+
+    async with async_session_maker() as s:
+        for row in _disc_job("later-disc-1", t0 + timedelta(seconds=60),
+                             disc=1, total=3):
+            s.add(row)
+        for row in _disc_job("earlier-disc-3", t0, disc=3, total=3):
+            s.add(row)
+        await s.commit()
+
+    await resolver._auto_match_album_group("later-disc-1")
+
+    async with async_session_maker() as s:
+        m1 = await s.get(JobMetadata, "later-disc-1")
+        m3 = await s.get(JobMetadata, "earlier-disc-3")
+        j1 = await s.get(Job, "later-disc-1")
+        j3 = await s.get(Job, "earlier-disc-3")
+
+    assert j1.album_group and j1.album_group == j3.album_group
+    assert m1.disc_number == 1
+    assert m3.disc_number == 3
+    assert m1.total_discs == 3 and m3.total_discs == 3

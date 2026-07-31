@@ -524,6 +524,69 @@ async def _sync_from_group(job_id: str, meta: Any) -> None:
             )
 
 
+def _next_free_slot(used: set[int]) -> int:
+    """Lowest disc number not already claimed."""
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def _add_issue(meta: Any, issue: str) -> None:
+    """Append an issue tag to a JobMetadata row, keeping the list unique."""
+    try:
+        issues = json.loads(meta.issues) if meta.issues else []
+    except (ValueError, TypeError):
+        issues = []
+    if not isinstance(issues, list):
+        issues = []
+    if issue not in issues:
+        issues.append(issue)
+    meta.issues = json.dumps(issues, ensure_ascii=False)
+    meta.needs_review = True
+
+
+async def _disc_evidence(session: Any, job_ids: list[str]) -> dict[str, dict]:
+    """Per-job disc position/count as claimed by each job's selected candidate.
+
+    Grouping must never invent a disc number for a disc whose TOC match already
+    said which medium it is. A candidate's `evidence` is written once at
+    resolution time and is never touched by grouping, so it stays trustworthy
+    even after JobMetadata has been rewritten.
+
+    Returns {job_id: {"disc_number": int | None, "total_discs": int | None}}.
+    """
+    from backend.metadata.normalize import extract_disc_info
+
+    if not job_ids:
+        return {}
+
+    result = await session.execute(
+        select(MetadataCandidate)
+        .where(
+            MetadataCandidate.job_id.in_(job_ids),
+            MetadataCandidate.selected.is_(True),
+        )
+        .order_by(MetadataCandidate.confidence.desc())
+    )
+
+    out: dict[str, dict] = {}
+    for cand in result.scalars():
+        if cand.job_id in out:
+            continue  # keep the highest-confidence selected candidate only
+        ev = parse_evidence(cand)
+        disc = ev.get("disc_number")
+        total = ev.get("total_discs")
+        # A source that doesn't expose a medium position may still spell the
+        # disc out in the release title ("... (Disc 2：路上から ...)").
+        _, title_disc = extract_disc_info(cand.album or "")
+        out[cand.job_id] = {
+            "disc_number": disc if isinstance(disc, int) and disc > 0 else title_disc,
+            "total_discs": total if isinstance(total, int) and total > 1 else None,
+        }
+    return out
+
+
 async def _auto_match_album_group(job_id: str) -> None:
     """Auto-detect and link multi-disc albums that were ripped without album_group.
 
@@ -593,41 +656,105 @@ async def _auto_match_album_group(job_id: str) -> None:
 
         # If an existing group was found, join it
         if existing_group_id:
-            job.album_group = existing_group_id
-            # Count total members to update total_discs
-            group_result = await session.execute(
-                select(Job).where(Job.album_group == existing_group_id)
-            )
-            group_size = len(group_result.scalars().all()) + 1  # +1 for this job
-            # Update total_discs for all members
-            group_metas = await session.execute(
+            # Query the siblings BEFORE assigning job.album_group, and exclude
+            # this job explicitly. The session autoflushes pending changes
+            # before a SELECT, so assigning the group first made this job show
+            # up in its own sibling query: the count was one too high and the
+            # job collided with its own disc_number and got bumped to a free
+            # slot. That is what turned a correct "disc 2 of 3" into "disc 4
+            # of 4" for a whole 3-disc set.
+            sibling_jobs = (await session.execute(
+                select(Job).where(
+                    Job.album_group == existing_group_id,
+                    Job.id != job_id,
+                )
+            )).scalars().all()
+            sibling_metas = (await session.execute(
                 select(JobMetadata)
                 .join(Job, Job.id == JobMetadata.job_id)
-                .where(Job.album_group == existing_group_id)
+                .where(
+                    Job.album_group == existing_group_id,
+                    Job.id != job_id,
+                )
+            )).scalars().all()
+            group_size = len(sibling_jobs) + 1
+
+            evidence = await _disc_evidence(
+                session, [j.id for j in sibling_jobs] + [job_id]
             )
-            used_numbers = set()
-            for gm in group_metas.scalars():
-                gm.total_discs = group_size
-                if gm.disc_number and gm.disc_number > 0:
-                    used_numbers.add(gm.disc_number)
-            meta.total_discs = group_size
-            # Assign disc_number if missing OR if it collides with a sibling.
-            # MusicBrainz returns disc_number=1 by default when it can't tell
-            # which medium a disc actually is, so two siblings can both arrive
-            # tagged as disc 1; the later arrival gets bumped to the next slot.
-            if (
-                not meta.disc_number
-                or meta.disc_number < 1
-                or meta.disc_number in used_numbers
-            ):
-                next_num = 1
-                while next_num in used_numbers:
-                    next_num += 1
-                meta.disc_number = next_num
+
+            # total_discs is a property of the album, not a tally of what we
+            # happened to rip in the last two hours. Prefer the strongest
+            # source-derived count (e.g. MusicBrainz's CD medium count) and
+            # fall back to the group size only when no source supplied one.
+            source_total = max(
+                (e["total_discs"] for e in evidence.values() if e["total_discs"]),
+                default=None,
+            )
+            # Without candidate evidence, fall back to the largest count anyone
+            # already carries (sanitizer may have written a source value there)
+            # before resorting to the group size.
+            declared_total = max(
+                [sm.total_discs or 0 for sm in sibling_metas]
+                + [meta.total_discs or 0, group_size]
+            )
+            total_discs = source_total or declared_total
+            if source_total and group_size > source_total:
+                logger.warning(
+                    "Album group %s has %d members but sources say %d discs — "
+                    "a mis-identified disc may have joined the group",
+                    existing_group_id, group_size, source_total,
+                )
+
+            # Slots the siblings hold, and which of those claims a source
+            # actually backs. An unbacked claim is only a guess and may be
+            # moved; a backed one may not.
+            used_numbers: set[int] = set()
+            backed_numbers: set[int] = set()
+            for sm in sibling_metas:
+                sm.total_discs = total_discs
+                if sm.disc_number and sm.disc_number > 0:
+                    used_numbers.add(sm.disc_number)
+                    if evidence.get(sm.job_id, {}).get("disc_number") == sm.disc_number:
+                        backed_numbers.add(sm.disc_number)
+
+            meta.total_discs = total_discs
+
+            our_disc = evidence.get(job_id, {}).get("disc_number")
+            if our_disc:
+                meta.disc_number = our_disc
+
+            if not meta.disc_number or meta.disc_number < 1:
+                meta.disc_number = _next_free_slot(used_numbers)
+            elif meta.disc_number in used_numbers:
+                if our_disc and meta.disc_number not in backed_numbers:
+                    # We know which disc we are; the sibling sitting on this
+                    # slot only guessed. Move the guess, not the evidence.
+                    for sm in sibling_metas:
+                        if sm.disc_number == meta.disc_number:
+                            used_numbers.discard(sm.disc_number)
+                            sm.disc_number = _next_free_slot(
+                                used_numbers | {meta.disc_number}
+                            )
+                            used_numbers.add(sm.disc_number)
+                            break
+                elif our_disc:
+                    # Both sides are source-backed. Renumbering either one
+                    # would be a guess, so keep both and let review decide.
+                    _add_issue(meta, "disc_number_conflict")
+                    logger.warning(
+                        "Job %s and a sibling both claim disc %d of group %s "
+                        "with source backing",
+                        job_id, meta.disc_number, existing_group_id,
+                    )
+                else:
+                    meta.disc_number = _next_free_slot(used_numbers)
+
+            job.album_group = existing_group_id
             await session.commit()
             logger.info(
                 "Joined existing album group %s as disc %d/%d for job %s",
-                existing_group_id, meta.disc_number, group_size, job_id,
+                existing_group_id, meta.disc_number, total_discs, job_id,
             )
             await broadcast("job:group", {
                 "album_group": existing_group_id,
@@ -652,25 +779,37 @@ async def _auto_match_album_group(job_id: str) -> None:
 
         group_id = str(uuid.uuid4())
 
-        # Sort by disc_number then created_at — when two jobs both claim the
-        # same disc_number (MB defaults ambiguous matches to disc 1), the
-        # older job wins the slot and the newer one is reassigned below.
-        all_matched.sort(
-            key=lambda jm: (jm[1].disc_number or 999, jm[0].created_at)
+        evidence = await _disc_evidence(session, [j.id for j, _ in all_matched])
+
+        # As in the join path: the album's disc count comes from the sources,
+        # not from how many discs happen to be sitting in the drives.
+        source_total = max(
+            (e["total_discs"] for e in evidence.values() if e["total_discs"]),
+            default=None,
+        )
+        total_discs = source_total or max(
+            [m.total_discs or 0 for _, m in all_matched] + [len(all_matched)]
         )
 
-        # Walk in order, claiming disc_number slots. First arrival keeps its
-        # claim; collisions and unset numbers get the next free slot.
+        # Source-backed discs claim their slot first; guesses fill in around
+        # them. Ordering purely by arrival let a guess squat on the slot a
+        # TOC-confirmed disc turned out to need.
+        all_matched.sort(
+            key=lambda jm: (
+                0 if evidence.get(jm[0].id, {}).get("disc_number") else 1,
+                jm[1].disc_number or 999,
+                jm[0].created_at,
+            )
+        )
+
         claimed: set[int] = set()
         for matched_job, matched_meta in all_matched:
             matched_job.album_group = group_id
-            matched_meta.total_discs = len(all_matched)
-            cur = matched_meta.disc_number
+            matched_meta.total_discs = total_discs
+            cur = evidence.get(matched_job.id, {}).get("disc_number") or matched_meta.disc_number
             if not cur or cur < 1 or cur in claimed:
-                cur = 1
-                while cur in claimed:
-                    cur += 1
-                matched_meta.disc_number = cur
+                cur = _next_free_slot(claimed)
+            matched_meta.disc_number = cur
             claimed.add(cur)
 
         await session.commit()
