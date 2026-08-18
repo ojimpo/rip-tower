@@ -445,12 +445,27 @@ async def _save_artwork(
     )
 
 
+def _is_squarish(art: Artwork) -> bool:
+    """Whether the image has the roughly 1:1 shape of a CD jacket.
+
+    Discogs search results sometimes return a banner or spine scan (a 599×362
+    image got auto-selected over a square 1200×1200 cover — Todoist
+    6hHpxR4qgw53mMJF). Unknown dimensions count as non-square so an
+    unverifiable image can't outrank a verified square one.
+    """
+    if not art.width or not art.height:
+        return False
+    return 0.8 <= art.width / art.height <= 1.25
+
+
 async def _auto_select_best(job_id: str) -> None:
     """Auto-select the most trustworthy artwork.
 
-    Order: manual upload > Cover Art Archive > Discogs > iTunes, with image
-    resolution as a tiebreak. CAA only fires when MusicBrainz matched the disc
-    by ID, so it is the most reliable text-search-free source.
+    Order: manual upload > square shape > Cover Art Archive > Discogs >
+    iTunes, with image resolution as a tiebreak. CAA only fires when
+    MusicBrainz matched the disc by ID, so it is the most reliable
+    text-search-free source. A manual upload always wins regardless of shape —
+    the user chose it deliberately.
     """
     from sqlalchemy import select
 
@@ -471,6 +486,8 @@ async def _auto_select_best(job_id: str) -> None:
         }
         artworks.sort(
             key=lambda a: (
+                a.source == "manual",
+                _is_squarish(a),
                 source_priority.get(a.source, 0),
                 (a.width or 0) * (a.height or 0),
             ),

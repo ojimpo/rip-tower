@@ -181,3 +181,67 @@ async def test_save_artwork_upserts_per_source(
     assert by_source["itunes"].url == "http://b"
     assert by_source["itunes"].width == 20
     assert by_source["discogs"].width == 30
+
+
+# ───────── _auto_select_best shape preference ─────────
+
+
+@pytest.mark.asyncio
+async def test_auto_select_prefers_square_over_banner(
+    monkeypatch, async_session_maker,
+):
+    """A square cover must beat a non-square banner even when the banner comes
+    from a higher-priority source (the 599×362 Discogs case)."""
+    monkeypatch.setattr(artwork, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-sq", drive_id="d", disc_id="s"))
+        s.add(Artwork(job_id="job-sq", source="discogs", width=599, height=362))
+        s.add(Artwork(job_id="job-sq", source="itunes", width=600, height=600))
+        await s.commit()
+
+    await artwork._auto_select_best("job-sq")
+
+    async with async_session_maker() as s:
+        rows = list((await s.execute(
+            select(Artwork).where(Artwork.job_id == "job-sq")
+        )).scalars())
+    selected = [r for r in rows if r.selected]
+    assert len(selected) == 1
+    assert selected[0].source == "itunes"
+
+
+@pytest.mark.asyncio
+async def test_auto_select_manual_wins_even_when_not_square(
+    monkeypatch, async_session_maker,
+):
+    """A manual upload is a deliberate user choice — shape must not demote it."""
+    monkeypatch.setattr(artwork, "async_session", async_session_maker)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-mn", drive_id="d", disc_id="m"))
+        s.add(Artwork(job_id="job-mn", source="manual", width=599, height=362))
+        s.add(Artwork(
+            job_id="job-mn", source="cover_art_archive", width=1200, height=1200,
+        ))
+        await s.commit()
+
+    await artwork._auto_select_best("job-mn")
+
+    async with async_session_maker() as s:
+        rows = list((await s.execute(
+            select(Artwork).where(Artwork.job_id == "job-mn")
+        )).scalars())
+    selected = [r for r in rows if r.selected]
+    assert len(selected) == 1
+    assert selected[0].source == "manual"
+
+
+def test_is_squarish_bounds():
+    def art(w, h):
+        return Artwork(job_id="x", source="itunes", width=w, height=h)
+
+    assert artwork._is_squarish(art(600, 600))
+    assert artwork._is_squarish(art(500, 600))       # slightly tall is fine
+    assert not artwork._is_squarish(art(599, 362))   # banner
+    assert not artwork._is_squarish(art(None, 600))  # unknown can't verify
