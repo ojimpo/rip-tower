@@ -67,3 +67,84 @@ async def test_lrclib_search_accepts_title_with_tieup_suffix():
     ])
     synced, plain = await lyrics._lrclib_search(client, "Mr.Children", "himawari")
     assert plain == "lyrics"
+
+
+# ───────── per-track artist preference (compilations) ─────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_lyrics_prefers_per_track_artist(
+    monkeypatch, async_session_maker,
+):
+    """On a compilation the album artist is "Various Artists" — the LRCLIB
+    query must use the track's own performer when one is recorded, falling
+    back to the album artist otherwise."""
+    from types import SimpleNamespace
+
+    from backend.models import Job, JobMetadata, Track
+
+    monkeypatch.setattr(lyrics, "async_session", async_session_maker)
+    monkeypatch.setattr(
+        lyrics, "get_config",
+        lambda: SimpleNamespace(
+            integrations=SimpleNamespace(musixmatch_token=None)
+        ),
+    )
+
+    queried: list[str] = []
+
+    async def fake_lrclib(artist, title, album, duration_ms):
+        queried.append(artist)
+        return None, f"lyrics for {title}"
+
+    monkeypatch.setattr(lyrics, "_fetch_lrclib", fake_lrclib)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-ly", drive_id="d", disc_id="l"))
+        s.add(JobMetadata(
+            job_id="job-ly", artist="Various Artists", album="Christmas Songs",
+        ))
+        s.add(Track(job_id="job-ly", track_num=1,
+                    title="All I Want for Christmas Is You",
+                    artist="Mariah Carey"))
+        s.add(Track(job_id="job-ly", track_num=2, title="Untitled", artist=None))
+        await s.commit()
+
+    await lyrics.fetch_lyrics("job-ly")
+
+    assert queried == ["Mariah Carey", "Various Artists"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_lyrics_for_track_prefers_per_track_artist(
+    monkeypatch, async_session_maker,
+):
+    from types import SimpleNamespace
+
+    from backend.models import Job, JobMetadata, Track
+
+    monkeypatch.setattr(lyrics, "async_session", async_session_maker)
+    monkeypatch.setattr(
+        lyrics, "get_config",
+        lambda: SimpleNamespace(
+            integrations=SimpleNamespace(musixmatch_token=None)
+        ),
+    )
+
+    queried: list[str] = []
+
+    async def fake_lrclib(artist, title, album, duration_ms):
+        queried.append(artist)
+        return "[00:01.00] line", None
+
+    monkeypatch.setattr(lyrics, "_fetch_lrclib", fake_lrclib)
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-l1", drive_id="d", disc_id="l"))
+        s.add(JobMetadata(job_id="job-l1", artist="Various Artists", album="Comp"))
+        s.add(Track(job_id="job-l1", track_num=1, title="Song", artist="宇多田ヒカル"))
+        await s.commit()
+
+    await lyrics.fetch_lyrics_for_track("job-l1", 1)
+
+    assert queried == ["宇多田ヒカル"]

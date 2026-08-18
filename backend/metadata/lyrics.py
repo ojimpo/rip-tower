@@ -60,14 +60,22 @@ async def fetch_lyrics(job_id: str) -> None:
         if not title:
             continue
 
+        # Prefer the per-track performer over the album artist: compilations
+        # carry "Various Artists" at the album level, and querying LRCLIB with
+        # that instead of the actual performer misses most tracks
+        # (Todoist 6hHq26hH74VWv6QF).
+        track_artist = track.artist or artist
+
         # Try LRCLIB first
-        synced, plain = await _fetch_lrclib(artist, title, album, track.duration_ms)
+        synced, plain = await _fetch_lrclib(
+            track_artist, title, album, track.duration_ms
+        )
         source = "lrclib" if (synced or plain) else None
 
         # Fallback to Musixmatch
         if not synced and not plain and musixmatch_token:
             synced, plain = await _fetch_musixmatch(
-                artist, title, album, musixmatch_token
+                track_artist, title, album, musixmatch_token
             )
             source = "musixmatch" if (synced or plain) else None
 
@@ -100,7 +108,8 @@ async def fetch_lyrics_for_track(job_id: str, track_num: int) -> None:
         if not track or not track.title:
             return
 
-    artist = meta.artist or ""
+    # Per-track performer first — see fetch_lyrics for the compilation case.
+    artist = track.artist or meta.artist or ""
     album = meta.album or ""
     title = track.title or ""
     musixmatch_token = get_config().integrations.musixmatch_token
