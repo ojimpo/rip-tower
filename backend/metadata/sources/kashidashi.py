@@ -353,11 +353,90 @@ def _recency_fallback_candidates(
     return out
 
 
+def _score_borrowed_item(
+    it: dict,
+    artist_norms: list[str],
+    album_norms: list[str],
+    track_count: int,
+) -> int:
+    """Score one borrowed item against a set of artist/album name variants.
+
+    Name variants let one call cover both the resolved spelling and its
+    MusicBrainz aliases, so an English-resolved album can still match the
+    library's Japanese title.
+    """
+    score = 0
+
+    # Album matching — check both exact containment and fuzzy similarity
+    best_album_sim = 0.0
+    album_contained = False
+    for field_val in [it.get("title", ""), it.get("metadata_album", "")]:
+        fn = norm(field_val)
+        if not fn:
+            continue
+        for album_n in album_norms:
+            if not album_n:
+                continue
+            if album_n == fn or album_n in fn or fn in album_n:
+                album_contained = True
+                best_album_sim = 1.0
+                break
+            best_album_sim = max(best_album_sim, similarity(album_n, fn))
+        if album_contained:
+            break
+    if album_contained:
+        score += 3
+    elif best_album_sim >= 0.6:
+        score += 2  # fuzzy album match
+
+    # Artist matching — check containment, fuzzy similarity,
+    # and handle romanization differences (e.g. "THE CHECKERS" vs "チェッカーズ")
+    best_artist_sim = 0.0
+    artist_contained = False
+    for field_val in [it.get("artist", ""), it.get("metadata_artist", "")]:
+        fn = norm(field_val)
+        if not fn:
+            continue
+        for artist_n in artist_norms:
+            if not artist_n:
+                continue
+            if artist_n == fn or artist_n in fn or fn in artist_n:
+                artist_contained = True
+                best_artist_sim = 1.0
+                break
+            best_artist_sim = max(best_artist_sim, similarity(artist_n, fn))
+        if artist_contained:
+            break
+    if artist_contained:
+        score += 2
+    elif best_artist_sim >= 0.5 and score > 0:
+        score += 1  # partial artist match when album already matched
+
+    # Track count bonus
+    tc_match = _track_count_matches(it, track_count)
+    if tc_match:
+        score += 3
+
+    # Strong album match + track count = likely correct even with different artist name format
+    if best_album_sim >= 0.7 and tc_match:
+        score += 2
+
+    return score
+
+
 async def match_kashidashi(job_id: str, identity: Any) -> None:
     """Post-resolution: fuzzy match the resolved metadata against kashidashi items.
 
     Saves KashidashiCandidate records for the job. If a clear match is found
     (no ambiguous ties), marks it as matched.
+
+    Cross-script fallback: when the resolved metadata is written in a different
+    language than the library record ("Eric Clapton / Unplugged" vs
+    「アンプラグド～アコースティック・クラプトン」), plain text similarity finds
+    nothing — so a zero-match first pass retries with the MusicBrainz
+    artist/release aliases, and if that also finds nothing, every active
+    borrowed CD is surfaced as a weak candidate so review shows the likely
+    item instead of silently giving up (Todoist 6hHpxQxX45fMq2jm).
     """
     base_url = get_config().integrations.kashidashi_url
     if not base_url:
@@ -391,60 +470,47 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
             logger.exception("Kashidashi API error during match")
             return
 
-    # Score each item
-    scored: list[tuple[int, dict]] = []
-    for it in items:
-        if it.get("type") != "cd":
-            continue
-        if it.get("returned_at"):
-            continue
+    cd_items = [
+        it for it in items
+        if it.get("type") == "cd" and not it.get("returned_at")
+    ]
 
-        score = 0
+    def _score_all(artist_norms: list[str], album_norms: list[str]) -> list[tuple[int, dict]]:
+        out = []
+        for it in cd_items:
+            score = _score_borrowed_item(it, artist_norms, album_norms, track_count)
+            if score > 0:
+                out.append((score, it))
+        return out
 
-        # Album matching — check both exact containment and fuzzy similarity
-        best_album_sim = 0.0
-        for field_val in [it.get("title", ""), it.get("metadata_album", "")]:
-            fn = norm(field_val)
-            if not fn or not album_n:
-                continue
-            if album_n == fn or album_n in fn or fn in album_n:
-                score += 3
-                best_album_sim = 1.0
-                break
-            sim = similarity(album_n, fn)
-            best_album_sim = max(best_album_sim, sim)
+    scored = _score_all([artist_n], [album_n])
 
-        if best_album_sim >= 0.6 and score == 0:
-            score += 2  # fuzzy album match
+    # Zero matches: retry with MusicBrainz aliases so a cross-script pair
+    # (English metadata vs Japanese library title, or vice versa) still meets.
+    if not scored:
+        release_id = _mb_release_id(meta)
+        if release_id:
+            from backend.metadata.sources.musicbrainz import (
+                fetch_release_artist_aliases,
+            )
 
-        # Artist matching — check containment, fuzzy similarity,
-        # and handle romanization differences (e.g. "THE CHECKERS" vs "チェッカーズ")
-        best_artist_sim = 0.0
-        for field_val in [it.get("artist", ""), it.get("metadata_artist", "")]:
-            fn = norm(field_val)
-            if not fn or not artist_n:
-                continue
-            if artist_n == fn or artist_n in fn or fn in artist_n:
-                score += 2
-                best_artist_sim = 1.0
-                break
-            sim = similarity(artist_n, fn)
-            best_artist_sim = max(best_artist_sim, sim)
+            artist_aliases, release_aliases = await fetch_release_artist_aliases(
+                release_id
+            )
+            if artist_aliases or release_aliases:
+                scored = _score_all(
+                    [artist_n, *(norm(a) for a in artist_aliases)],
+                    [album_n, *(norm(a) for a in release_aliases)],
+                )
 
-        if best_artist_sim >= 0.5 and score > 0:
-            score += 1  # partial artist match when album already matched
-
-        # Track count bonus
-        tc_match = _track_count_matches(it, track_count)
-        if tc_match:
-            score += 3
-
-        # Strong album match + track count = likely correct even with different artist name format
-        if best_album_sim >= 0.7 and tc_match:
-            score += 2
-
-        if score > 0:
-            scored.append((score, it))
+    # Still nothing: surface every active borrowed CD as a weak candidate so
+    # the user can pick the right one in review instead of getting an empty
+    # list. An item whose recorded track count matches the disc already
+    # surfaces through normal scoring (+3), so everything left here is an
+    # even-odds guess.
+    is_fallback = not scored
+    if is_fallback:
+        scored = [(1, it) for it in cd_items if not it.get("ripped_at")]
 
     if not scored:
         logger.debug("No kashidashi candidates matched for job %s", job_id)
@@ -452,10 +518,11 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
 
     scored.sort(key=lambda x: (x[0], x[1].get("borrowed_date", "")), reverse=True)
 
-    # Save candidates and determine match
+    # Save candidates and determine match. Fallback rows are guesses with no
+    # text evidence at all — never auto-match them, even a lone one.
     top_score = scored[0][0]
     tied = [c for c in scored if c[0] == top_score]
-    is_unique_match = len(tied) == 1
+    is_unique_match = not is_fallback and len(tied) == 1
 
     async with async_session() as session:
         from sqlalchemy import delete
@@ -473,7 +540,12 @@ async def match_kashidashi(job_id: str, identity: Any) -> None:
                 score=float(score),
                 # Score-based labels: this matcher works on text similarity, so
                 # even a high score is "strong", never a proven disc-ID match.
-                match_type="strong" if score >= 7 else "fuzzy",
+                # "fallback" = surfaced only because nothing text-matched.
+                match_type=(
+                    "fallback" if is_fallback
+                    else "strong" if score >= 7
+                    else "fuzzy"
+                ),
                 matched=is_unique_match and score == top_score,
             )
             session.add(candidate)

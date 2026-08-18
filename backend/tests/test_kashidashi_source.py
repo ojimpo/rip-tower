@@ -344,3 +344,134 @@ async def test_best_match_cross_script_album_not_relaxed_when_unanchored(monkeyp
     _item_res, art, alb = await kashidashi_mod.best_kashidashi_match(cand, items)
     assert art >= 0.6      # artist still bridges via alias
     assert alb < 0.6       # album stays unmatched → resolver won't boost
+
+
+# ───────── match_kashidashi (post-resolution matching) ─────────
+
+
+async def _run_match(monkeypatch, async_session_maker, meta_kwargs, items,
+                     track_count=14, aliases=None):
+    """Set up a job + mocked kashidashi API and run match_kashidashi."""
+    from backend.models import Job, JobMetadata
+
+    monkeypatch.setattr(kashidashi_mod, "async_session", async_session_maker)
+    # The real API tags every item with its media type; _item() omits it.
+    items = [{**it, "type": it.get("type", "cd")} for it in items]
+    _patch_kashidashi_http(monkeypatch, items)
+
+    async def _aliases(_rid):
+        return aliases or ([], [])
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.musicbrainz.fetch_release_artist_aliases",
+        _aliases,
+    )
+
+    async with async_session_maker() as s:
+        s.add(Job(id="job-k", drive_id=None, disc_id="x"))
+        s.add(JobMetadata(job_id="job-k", **meta_kwargs))
+        await s.commit()
+
+    identity = SimpleNamespace(disc_id="x", track_count=track_count)
+    await kashidashi_mod.match_kashidashi("job-k", identity)
+
+
+async def _saved_candidates(async_session_maker):
+    from sqlalchemy import select
+    from backend.models import KashidashiCandidate
+
+    async with async_session_maker() as s:
+        rows = (await s.execute(
+            select(KashidashiCandidate)
+            .where(KashidashiCandidate.job_id == "job-k")
+            .order_by(KashidashiCandidate.score.desc())
+        )).scalars().all()
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_match_kashidashi_same_script_still_matches(
+    monkeypatch, async_session_maker,
+):
+    """Refactor guard: the direct text path behaves as before."""
+    await _run_match(
+        monkeypatch, async_session_maker,
+        {"artist": "宮本浩次", "album": "ROMANCE"},
+        [_item(id=7, artist="宮本浩次", title="ROMANCE", metadata_track_count=14)],
+    )
+    rows = await _saved_candidates(async_session_maker)
+    assert len(rows) == 1
+    assert rows[0].matched is True
+    assert rows[0].match_type == "strong"
+
+
+@pytest.mark.asyncio
+async def test_match_kashidashi_cross_script_via_mb_aliases(
+    monkeypatch, async_session_maker,
+):
+    """English-resolved metadata matches the library's Japanese record through
+    MusicBrainz aliases (the n7iwks6m Unplugged case)."""
+    await _run_match(
+        monkeypatch, async_session_maker,
+        {
+            "artist": "Eric Clapton",
+            "album": "Unplugged",
+            "source_url": "https://musicbrainz.org/release/abc-123",
+        },
+        [_item(
+            id=42,
+            artist="エリック・クラプトン",
+            title="アンプラグド～アコースティック・クラプトン",
+        )],
+        aliases=(
+            ["Eric Clapton", "エリック・クラプトン"],
+            ["アンプラグド～アコースティック・クラプトン"],
+        ),
+    )
+    rows = await _saved_candidates(async_session_maker)
+    assert len(rows) == 1
+    assert rows[0].item_id == 42
+    assert rows[0].matched is True
+    assert rows[0].match_type in ("strong", "fuzzy")
+
+
+@pytest.mark.asyncio
+async def test_match_kashidashi_track_count_alone_still_surfaces(
+    monkeypatch, async_session_maker,
+):
+    """An item whose recorded track count equals the disc's surfaces through
+    normal scoring even when no text matches — this is the signal that keeps
+    fallback rows out of the way."""
+    await _run_match(
+        monkeypatch, async_session_maker,
+        {"artist": "Eric Clapton", "album": "Unplugged"},
+        [_item(id=5, artist="別人", title="無関係なアルバム",
+               metadata_track_count=14)],
+    )
+    rows = await _saved_candidates(async_session_maker)
+    assert [r.item_id for r in rows] == [5]
+    assert rows[0].match_type == "fuzzy"
+
+
+@pytest.mark.asyncio
+async def test_match_kashidashi_fallback_surfaces_all_borrowed(
+    monkeypatch, async_session_maker,
+):
+    """When nothing scores at all (and no aliases bridge the gap), every
+    active borrowed CD is surfaced as an unmatched weak candidate."""
+    await _run_match(
+        monkeypatch, async_session_maker,
+        {"artist": "Eric Clapton", "album": "Unplugged"},  # no MB source_url
+        [
+            _item(id=1, artist="別人", title="無関係なアルバム"),
+            _item(id=2, artist="他人", title="これも無関係"),
+            _item(id=3, artist="返却済", title="返した",
+                  returned_at="2026-08-01T00:00:00Z"),
+            _item(id=4, artist="既リップ", title="済み",
+                  ripped_at="2026-08-10T00:00:00Z"),
+        ],
+    )
+    rows = await _saved_candidates(async_session_maker)
+    assert sorted(r.item_id for r in rows) == [1, 2]  # returned/ripped excluded
+    assert all(r.match_type == "fallback" for r in rows)
+    assert all(r.matched is False for r in rows)  # fallback never auto-matches
