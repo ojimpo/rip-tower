@@ -232,7 +232,9 @@ def _is_disc_anchored(candidate: Any) -> bool:
     Then the album identity is proven by the disc itself, so the kashidashi
     cross-check only needs to confirm the *artist* to decide a TOC collision.
     """
-    return parse_evidence(candidate).get("match") in ("toc_submission", "exact_discid")
+    return parse_evidence(candidate).get("match") in (
+        "toc_submission", "exact_discid", "cddb_exact",
+    )
 
 
 async def best_kashidashi_match(

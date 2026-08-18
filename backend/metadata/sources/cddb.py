@@ -27,6 +27,22 @@ CDDB_HELLO = "kouki arigato-nas rip-tower 0.1"
 # is enough to surface the real record without hammering the server.
 MAX_MATCHES = 3
 
+# Confidence levels. A record whose frame offsets match the physical disc's
+# TOC is proven by the disc itself, so it must outrank MusicBrainz's *fuzzy*
+# TOC-submission matches (confidence 90, tolerating offsets thousands of
+# frames off) — a flat 60 let an unrelated MB fuzzy match beat GnuDB entries
+# that agreed with the disc frame-for-frame (Todoist 6hHpxQm5p2RphP9m).
+# Records we can't verify (offsets missing or diverging) keep the old 60:
+# disc IDs collide across unrelated discs, so an unverified match is decent
+# evidence but not proof.
+_CONF_TOC_VERIFIED = 92
+_CONF_UNVERIFIED = 60
+
+# Max per-track drift (frames, 75/sec) still counted as the same TOC after
+# removing the lead-in shift. Same-pressing submissions differ by at most a
+# few frames; a colliding entry for a different disc is off by thousands.
+_TOC_DRIFT_TOLERANCE = 150
+
 
 class CddbSource(MetadataSource):
     @property
@@ -65,7 +81,9 @@ class CddbSource(MetadataSource):
             except Exception:
                 logger.exception("CDDB read failed for %s/%s", cat, did)
                 continue
-            candidate = self._parse_read_response(read_resp, cat, did, track_count)
+            candidate = self._parse_read_response(
+                read_resp, cat, did, track_count, offsets
+            )
             if candidate:
                 candidates.append(candidate)
 
@@ -105,8 +123,56 @@ class CddbSource(MetadataSource):
         return []
 
     @staticmethod
+    def _parse_frame_offsets(lines: list[str]) -> list[int]:
+        """Track frame offsets from the xmcd comment header of a read response.
+
+        The block looks like:
+            # Track frame offsets:
+            #        150
+            #        25075
+            #
+        and ends at the first comment line that isn't a bare number.
+        """
+        offsets: list[int] = []
+        in_block = False
+        for line in lines:
+            if not line.startswith("#"):
+                if in_block:
+                    break
+                continue
+            body = line[1:].strip()
+            if not in_block:
+                if body.lower().startswith("track frame offsets"):
+                    in_block = True
+                continue
+            if body.isdigit():
+                offsets.append(int(body))
+            else:
+                break
+        return offsets
+
+    @staticmethod
+    def _toc_matches(record_offsets: list[int], disc_offsets: list[int]) -> bool:
+        """Whether a record's frame offsets describe the physical disc's TOC.
+
+        Shift-invariant: submitters' drives report different lead-in gaps, so
+        a constant offset across all tracks still means the same disc.
+        """
+        if not disc_offsets or len(record_offsets) != len(disc_offsets):
+            return False
+        shift = record_offsets[0] - disc_offsets[0]
+        return all(
+            abs(r - shift - d) <= _TOC_DRIFT_TOLERANCE
+            for r, d in zip(record_offsets, disc_offsets)
+        )
+
+    @staticmethod
     def _parse_read_response(
-        resp: str, cat: str, did: str, track_count: int
+        resp: str,
+        cat: str,
+        did: str,
+        track_count: int,
+        disc_offsets: list[int] | None = None,
     ) -> dict | None:
         """Parse a `cddb read` response into a candidate dict.
 
@@ -148,11 +214,16 @@ class CddbSource(MetadataSource):
 
         track_titles = [v for _, v in sorted(titles.items())][:track_count]
 
-        conf = 60  # CDDB is decent but not as reliable as MB disc ID
-        evidence = {
+        conf = _CONF_UNVERIFIED
+        evidence: dict[str, Any] = {
             "cddb_cat": cat,
             "cddb_discid": did,
         }
+        record_offsets = CddbSource._parse_frame_offsets(lines)
+        if disc_offsets and CddbSource._toc_matches(record_offsets, disc_offsets):
+            conf = _CONF_TOC_VERIFIED
+            evidence["match"] = "cddb_exact"
+            evidence["toc_verified"] = True
         if year:
             evidence["year"] = year
         if genre:

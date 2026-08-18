@@ -248,7 +248,7 @@ async def sanitize_candidates(job_id: str) -> JobMetadata | None:
     ):
         for c in candidates[1:]:
             if (
-                _candidate_match_kind(c) in ("toc_submission", "exact_discid")
+                _candidate_match_kind(c) in ("toc_submission", "exact_discid", "cddb_exact")
                 and similarity(best.artist or "", c.artist or "") < _ARTIST_CONFLICT_SIM
             ):
                 issues.append("kashidashi_ambiguous")
@@ -413,8 +413,9 @@ def _kashidashi_item_id(candidate: MetadataCandidate | None) -> int | None:
 def _candidate_match_kind(candidate: MetadataCandidate | None) -> str | None:
     """The `match` provenance in a candidate's evidence, if any.
 
-    e.g. 'toc_submission'/'exact_discid' (disc-anchored), 'text_search'/'search'
-    (text-derived), 'recency_fallback' (a borrowed-CD seed with no disc match).
+    e.g. 'toc_submission'/'exact_discid'/'cddb_exact' (disc-anchored),
+    'text_search'/'search' (text-derived), 'recency_fallback' (a borrowed-CD
+    seed with no disc match).
     """
     return parse_evidence(candidate).get("match")
 
